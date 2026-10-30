@@ -14,5 +14,5 @@ run_worker_first = ["/api", "/api/*"]
 [[d1_databases]]
 binding = "DB"
 database_name = "study-central"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "41665065-15cb-46a3-a96b-c290c04b96d1"
 migrations_dir = "migrations"
