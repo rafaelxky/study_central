@@ -60,7 +60,14 @@ This configuration serves HTTP only. Configure TLS with your deployment's certif
 
 ## Cloudflare Pages
 
-The repository root is configured as an npm workspace so Cloudflare Pages can install dependencies from the repository root. The root `wrangler.toml` sets the static build output to `frontend/dist`; use `npm run build` as the build command. The Rust API is not deployed by Pages and must be hosted separately, with `/api` routed to that backend.
+The repository root is configured as an npm workspace so Cloudflare can install dependencies from the repository root. For a Cloudflare Pages project, set the build command to `npm run build` and the build output directory to `frontend/dist`. Do not use `npx wrangler deploy`, which deploys a Worker. For a manual CLI deployment, build first and deploy the Pages output:
+
+```sh
+npm run build
+npm run deploy:pages
+```
+
+The Pages project named `studyspace` must already exist in Cloudflare. The Rust API is not deployed by Pages and must be hosted separately, with `/api` routed to that backend.
 
 ## Backend configuration
 
