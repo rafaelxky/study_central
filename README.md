@@ -1,6 +1,6 @@
 # Studyspace
 
-Studyspace is a React + TypeScript frontend with a Rust backend. It supports account creation with username, email, and password, email/password login, session restore, and logout. Signed-in users can create, view, search, and remove their own website shortcuts, create and organize server-saved notes, pin notes to the dashboard, manage a server-saved to-do list, and save a university token to their account.
+Studyspace is a React + TypeScript frontend with a Rust backend. It supports account creation with username, email, and password, email/password login, session restore, and logout. Signed-in users can create, view, search, and remove their own website shortcuts, create and organize server-saved notes, pin notes to the dashboard, manage a server-saved to-do list, maintain a calendar of one-day events and recurring classes, and save a university token to their account.
 
 The frontend caches only the signed-in profile in browser local storage so the dashboard can appear immediately on refresh. Passwords and session credentials stay out of local storage; the server validates the HttpOnly session cookie.
 
@@ -32,7 +32,31 @@ Open **Notes** from the left navigation to create, edit, pin, and delete notes. 
 
 The dashboard to-do list lets you add tasks, mark them complete or incomplete, and remove them. Tasks are stored in the backend database per account.
 
+Open **Calendar** from the left navigation to add one-day events or weekly classes with inclusive start and end dates, descriptions, times, and color labels. Set a reminder from 1 to 30 days ahead (or leave it at no reminder); reminders appear under the bell and on the Notifications page. Calendar items are stored in the backend database per account.
+
 The backend fetches a site's `/favicon.ico` when a shortcut is added and saves a small supported image with that shortcut. If an icon is unavailable, the shortcut still works with a generic icon. Favicon requests are limited to public HTTP(S) hosts and standard web ports; private or local network addresses and redirects are not fetched. Shortcut URLs belong to the account that created them.
+
+## Nginx deployment
+
+Build the frontend and make sure the backend is running on `127.0.0.1:3001`:
+
+```sh
+npm run build --prefix frontend
+./run_backend.sh
+```
+
+The project-root [nginx.conf](./nginx.conf) serves the frontend from `/var/www/studyspace`, proxies `/api` requests to the local backend, enables client-side route fallback, and disables API caching. Copy the build output to that web root, change `server_name` to your domain (and `root` if desired), then install the server block and reload Nginx:
+
+```sh
+sudo mkdir -p /var/www/studyspace
+sudo cp -r frontend/dist/. /var/www/studyspace/
+sudo cp nginx.conf /etc/nginx/sites-available/studyspace
+sudo ln -s /etc/nginx/sites-available/studyspace /etc/nginx/sites-enabled/studyspace
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+This configuration serves HTTP only. Configure TLS with your deployment's certificate before exposing the site publicly, then set `COOKIE_SECURE=true` for the backend.
 
 ## Backend configuration
 

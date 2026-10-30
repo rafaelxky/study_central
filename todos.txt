@@ -7,7 +7,7 @@ X - Dashboard to add shortcuts to important websites.
 
 - remove bell with notification substitute for regular bell, add drop down menu for notif. When notif received change icons
 
-- remove legends from shortcuts make it as simple as possible
+- remove unessessary legends make it as simple as possible
 
 X - jwt token is copied from website and sent to DB
 
@@ -19,13 +19,15 @@ X - jwt token input area should not be evident in the main page. It will not be 
 
 X - accept correct session token
 
-- shortcuts should fetch favicon from website
+- shortcuts should fetch favicon from website currently not working properly, some work some dont
 
 X - add a notes section were I can create new notes and organize them. The server must keep them. allow me to pin a note in the main menu
-- add a todo list in main were I can add remove and check tasks
+X - add a todo list in main were I can add remove and check tasks
 - add a calendar were I can mark events and weekly classes are listed, it must allow for title and description of each event or class and color coding, must allow for one day events such as tests and also weekly stuff, for daily it must allow me to choose how many days before to notify me. A notification is just in the bell. When I press the bell it drops down saying what is predetermined then I can press to see more. 
 
 - allow to edit the shortcuts
 - add shortcut folders
 
 - should be able to unpin notes from dashboard
+
+- checklist should have its own vertical scroll for pc, add a dedicated page for todo list in paralel with the dashboard version

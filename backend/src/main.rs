@@ -183,6 +183,64 @@ struct TaskResponse {
 }
 
 #[derive(Deserialize)]
+struct SaveCalendarEventRequest {
+    title: String,
+    description: String,
+    color: String,
+    event_type: String,
+    schedule: String,
+    event_date: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    weekdays: Vec<u8>,
+    start_time: Option<String>,
+    end_time: Option<String>,
+    reminder_days: u8,
+}
+
+#[derive(Serialize)]
+struct CalendarEvent {
+    id: String,
+    title: String,
+    description: String,
+    color: String,
+    event_type: String,
+    schedule: String,
+    event_date: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    weekdays: Vec<u8>,
+    start_time: Option<String>,
+    end_time: Option<String>,
+    reminder_days: u8,
+}
+
+#[derive(Serialize)]
+struct CalendarEventsResponse {
+    events: Vec<CalendarEvent>,
+}
+
+#[derive(Serialize)]
+struct CalendarEventResponse {
+    event: CalendarEvent,
+}
+
+struct ValidatedCalendarEvent {
+    title: String,
+    description: String,
+    color: String,
+    event_type: String,
+    schedule: String,
+    event_date: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    weekdays: Vec<u8>,
+    start_time: Option<String>,
+    end_time: Option<String>,
+    reminder_days: u8,
+}
+
+#[derive(Deserialize)]
 struct SaveUniversityTokenRequest {
     token: String,
 }
@@ -293,6 +351,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .execute(&pool)
     .await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS calendar_events (
+            id TEXT PRIMARY KEY NOT NULL,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL,
+            color TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            schedule TEXT NOT NULL,
+            event_date TEXT,
+            start_date TEXT,
+            end_date TEXT,
+            weekdays TEXT NOT NULL,
+            start_time TEXT,
+            end_time TEXT,
+            reminder_days INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(&pool)
+    .await?;
 
     let dummy_password_hash = hash_password("not-a-real-user-password")
         .await
@@ -343,6 +421,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/tasks/{id}",
             axum::routing::patch(update_task).delete(delete_task),
+        )
+        .route(
+            "/api/calendar/events",
+            get(list_calendar_events).post(create_calendar_event),
+        )
+        .route(
+            "/api/calendar/events/{id}",
+            axum::routing::put(update_calendar_event).delete(delete_calendar_event),
         )
         .route(
             "/api/integrations/university/token",
@@ -956,6 +1042,403 @@ fn validate_task_text(text: &str) -> Result<&str, ApiError> {
     Ok(text)
 }
 
+type CalendarEventRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+    Option<String>,
+    Option<String>,
+    i64,
+);
+
+fn calendar_event_from_row(row: CalendarEventRow) -> Result<CalendarEvent, ApiError> {
+    let (
+        id,
+        title,
+        description,
+        color,
+        event_type,
+        schedule,
+        event_date,
+        start_date,
+        end_date,
+        weekdays,
+        start_time,
+        end_time,
+        reminder_days,
+    ) = row;
+    let weekdays = serde_json::from_str(&weekdays).map_err(ApiError::internal)?;
+    let reminder_days = u8::try_from(reminder_days).map_err(ApiError::internal)?;
+    Ok(CalendarEvent {
+        id,
+        title,
+        description,
+        color,
+        event_type,
+        schedule,
+        event_date,
+        start_date,
+        end_date,
+        weekdays,
+        start_time,
+        end_time,
+        reminder_days,
+    })
+}
+
+async fn list_calendar_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let user_id = authenticated_user_id(&state, &headers).await?;
+    let rows = sqlx::query_as::<_, CalendarEventRow>(
+        "SELECT id, title, description, color, event_type, schedule, event_date,
+                start_date, end_date, weekdays, start_time, end_time, reminder_days
+         FROM calendar_events WHERE user_id = ? ORDER BY COALESCE(event_date, start_date), title",
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(ApiError::internal)?;
+    let events = rows
+        .into_iter()
+        .map(calendar_event_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut response = Json(CalendarEventsResponse { events }).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn create_calendar_event(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    request: Result<Json<SaveCalendarEventRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let user_id = authenticated_user_id(&state, &headers).await?;
+    let Json(request) = request.map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Request body must contain valid JSON.",
+        )
+    })?;
+    let event = validate_calendar_event(request)?;
+    let id = random_token();
+    save_calendar_event(&state, &user_id, &id, &event).await?;
+    let mut response = (
+        StatusCode::CREATED,
+        Json(CalendarEventResponse {
+            event: calendar_event_from_validated(id, event),
+        }),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn update_calendar_event(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    request: Result<Json<SaveCalendarEventRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let user_id = authenticated_user_id(&state, &headers).await?;
+    let Json(request) = request.map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Request body must contain valid JSON.",
+        )
+    })?;
+    let event = validate_calendar_event(request)?;
+    let result = sqlx::query(
+        "UPDATE calendar_events SET title = ?, description = ?, color = ?, event_type = ?,
+         schedule = ?, event_date = ?, start_date = ?, end_date = ?, weekdays = ?,
+         start_time = ?, end_time = ?, reminder_days = ?
+         WHERE id = ? AND user_id = ?",
+    )
+    .bind(&event.title)
+    .bind(&event.description)
+    .bind(&event.color)
+    .bind(&event.event_type)
+    .bind(&event.schedule)
+    .bind(&event.event_date)
+    .bind(&event.start_date)
+    .bind(&event.end_date)
+    .bind(serde_json::to_string(&event.weekdays).map_err(ApiError::internal)?)
+    .bind(&event.start_time)
+    .bind(&event.end_time)
+    .bind(event.reminder_days)
+    .bind(&id)
+    .bind(&user_id)
+    .execute(&state.pool)
+    .await
+    .map_err(ApiError::internal)?;
+    if result.rows_affected() == 0 {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "Calendar event not found.",
+        ));
+    }
+
+    let mut response = Json(CalendarEventResponse {
+        event: calendar_event_from_validated(id, event),
+    })
+    .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn save_calendar_event(
+    state: &AppState,
+    user_id: &str,
+    id: &str,
+    event: &ValidatedCalendarEvent,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        "INSERT INTO calendar_events
+         (id, user_id, title, description, color, event_type, schedule, event_date,
+          start_date, end_date, weekdays, start_time, end_time, reminder_days)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(id)
+    .bind(user_id)
+    .bind(&event.title)
+    .bind(&event.description)
+    .bind(&event.color)
+    .bind(&event.event_type)
+    .bind(&event.schedule)
+    .bind(&event.event_date)
+    .bind(&event.start_date)
+    .bind(&event.end_date)
+    .bind(serde_json::to_string(&event.weekdays).map_err(ApiError::internal)?)
+    .bind(&event.start_time)
+    .bind(&event.end_time)
+    .bind(event.reminder_days)
+    .execute(&state.pool)
+    .await
+    .map_err(ApiError::internal)?;
+    Ok(())
+}
+
+async fn delete_calendar_event(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let user_id = authenticated_user_id(&state, &headers).await?;
+    let result = sqlx::query("DELETE FROM calendar_events WHERE id = ? AND user_id = ?")
+        .bind(id)
+        .bind(user_id)
+        .execute(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+    if result.rows_affected() == 0 {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "Calendar event not found.",
+        ));
+    }
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+fn calendar_event_from_validated(id: String, event: ValidatedCalendarEvent) -> CalendarEvent {
+    CalendarEvent {
+        id,
+        title: event.title,
+        description: event.description,
+        color: event.color,
+        event_type: event.event_type,
+        schedule: event.schedule,
+        event_date: event.event_date,
+        start_date: event.start_date,
+        end_date: event.end_date,
+        weekdays: event.weekdays,
+        start_time: event.start_time,
+        end_time: event.end_time,
+        reminder_days: event.reminder_days,
+    }
+}
+
+fn validate_calendar_event(
+    request: SaveCalendarEventRequest,
+) -> Result<ValidatedCalendarEvent, ApiError> {
+    let title = request.title.trim();
+    if title.is_empty() || title.chars().count() > 120 || title.chars().any(char::is_control) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Calendar title must be between 1 and 120 characters.",
+        ));
+    }
+    if request.description.chars().count() > 4000 {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Calendar description must be 4,000 characters or fewer.",
+        ));
+    }
+    if !matches!(
+        request.color.as_str(),
+        "#bda7f5" | "#f2a6a0" | "#f2c879" | "#83c9ad" | "#83b8e8" | "#d99bc8"
+    ) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Choose a supported calendar color.",
+        ));
+    }
+    if !matches!(request.event_type.as_str(), "event" | "class") {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Calendar item type must be event or class.",
+        ));
+    }
+    if !matches!(request.schedule.as_str(), "once" | "weekly")
+        || (request.event_type == "event" && request.schedule != "once")
+        || (request.event_type == "class" && request.schedule != "weekly")
+    {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Events must be one-day items and classes must repeat weekly.",
+        ));
+    }
+    if request.reminder_days > 30 {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Calendar reminders can be set up to 30 days before.",
+        ));
+    }
+    let (event_date, start_date, end_date, weekdays) = if request.schedule == "once" {
+        let Some(event_date) = request.event_date.filter(|date| valid_calendar_date(date)) else {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "Choose a valid date for this event.",
+            ));
+        };
+        (Some(event_date), None, None, Vec::new())
+    } else {
+        let Some(start_date) = request.start_date.filter(|date| valid_calendar_date(date)) else {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "Choose a valid class start date.",
+            ));
+        };
+        let Some(end_date) = request.end_date.filter(|date| valid_calendar_date(date)) else {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "Choose a valid class end date.",
+            ));
+        };
+        if end_date < start_date {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "Class end date must be on or after its start date.",
+            ));
+        }
+        let mut weekdays = request.weekdays;
+        weekdays.sort_unstable();
+        weekdays.dedup();
+        if weekdays.is_empty() || weekdays.iter().any(|day| !(1..=7).contains(day)) {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "Choose at least one valid weekday for this class.",
+            ));
+        }
+        (None, Some(start_date), Some(end_date), weekdays)
+    };
+    let start_time = normalize_calendar_time(request.start_time)?;
+    let end_time = normalize_calendar_time(request.end_time)?;
+    if start_time.is_some() != end_time.is_some()
+        || start_time
+            .as_ref()
+            .zip(end_time.as_ref())
+            .is_some_and(|(start, end)| start >= end)
+    {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Provide a valid start and end time, with the end later than the start.",
+        ));
+    }
+
+    Ok(ValidatedCalendarEvent {
+        title: title.to_owned(),
+        description: request.description,
+        color: request.color,
+        event_type: request.event_type,
+        schedule: request.schedule,
+        event_date,
+        start_date,
+        end_date,
+        weekdays,
+        start_time,
+        end_time,
+        reminder_days: request.reminder_days,
+    })
+}
+
+fn normalize_calendar_time(time: Option<String>) -> Result<Option<String>, ApiError> {
+    let Some(time) = time.filter(|time| !time.is_empty()) else {
+        return Ok(None);
+    };
+    let mut parts = time.split(':');
+    let valid = match (parts.next(), parts.next(), parts.next()) {
+        (Some(hour), Some(minute), None) => {
+            hour.len() == 2
+                && minute.len() == 2
+                && hour.parse::<u8>().is_ok_and(|value| value <= 23)
+                && minute.parse::<u8>().is_ok_and(|value| value <= 59)
+        }
+        _ => false,
+    };
+    if !valid {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Enter a valid calendar time.",
+        ));
+    }
+    Ok(Some(time))
+}
+
+fn valid_calendar_date(date: &str) -> bool {
+    let mut parts = date.split('-');
+    let (Some(year), Some(month), Some(day), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    if year.len() != 4
+        || month.len() != 2
+        || day.len() != 2
+        || !year.bytes().all(|byte| byte.is_ascii_digit())
+        || !month.bytes().all(|byte| byte.is_ascii_digit())
+        || !day.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return false;
+    }
+    let (Ok(year), Ok(month), Ok(day)) =
+        (year.parse::<u16>(), month.parse::<u8>(), day.parse::<u8>())
+    else {
+        return false;
+    };
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 400 == 0 || (year % 4 == 0 && year % 100 != 0) => 29,
+        2 => 28,
+        _ => return false,
+    };
+    year > 0 && day >= 1 && day <= days_in_month
+}
+
 async fn authenticated_user_id(state: &AppState, headers: &HeaderMap) -> Result<String, ApiError> {
     let Some(token) = session_token(headers) else {
         return Err(ApiError::new(
@@ -1509,9 +1992,10 @@ fn clear_session_cookie(response: &mut Response, secure: bool) -> Result<(), Api
 #[cfg(test)]
 mod tests {
     use super::{
-        encrypt_university_token, is_public_ip, normalize_email, normalize_shortcut_url,
-        parse_encryption_key, validate_note_fields, validate_password, validate_task_text,
-        validate_university_token, validate_username,
+        SaveCalendarEventRequest, encrypt_university_token, is_public_ip, normalize_email,
+        normalize_shortcut_url, parse_encryption_key, valid_calendar_date, validate_calendar_event,
+        validate_note_fields, validate_password, validate_task_text, validate_university_token,
+        validate_username,
     };
     use aes_gcm::{
         Aes256Gcm, Nonce,
@@ -1557,6 +2041,80 @@ mod tests {
         assert!(validate_task_text(" ").is_err());
         assert!(validate_task_text(&"t".repeat(301)).is_err());
         assert!(validate_task_text("task\nwith newline").is_err());
+    }
+
+    fn calendar_event_request() -> SaveCalendarEventRequest {
+        SaveCalendarEventRequest {
+            title: "  Study group  ".to_owned(),
+            description: "Review chapter 3".to_owned(),
+            color: "#bda7f5".to_owned(),
+            event_type: "event".to_owned(),
+            schedule: "once".to_owned(),
+            event_date: Some("2024-02-29".to_owned()),
+            start_date: None,
+            end_date: None,
+            weekdays: Vec::new(),
+            start_time: Some("09:30".to_owned()),
+            end_time: Some("10:30".to_owned()),
+            reminder_days: 2,
+        }
+    }
+
+    #[test]
+    fn calendar_events_validate_dates_times_and_reminders() {
+        assert!(valid_calendar_date("2024-02-29"));
+        assert!(!valid_calendar_date("2023-02-29"));
+        assert!(!valid_calendar_date("0000-01-01"));
+        assert!(!valid_calendar_date("2024-13-01"));
+
+        let valid_event = validate_calendar_event(calendar_event_request()).unwrap();
+        assert_eq!(valid_event.title, "Study group");
+        assert_eq!(valid_event.event_date.as_deref(), Some("2024-02-29"));
+        assert_eq!(valid_event.reminder_days, 2);
+
+        let mut invalid_event = calendar_event_request();
+        invalid_event.start_time = Some("25:00".to_owned());
+        assert!(validate_calendar_event(invalid_event).is_err());
+
+        let mut invalid_event = calendar_event_request();
+        invalid_event.end_time = Some("09:00".to_owned());
+        assert!(validate_calendar_event(invalid_event).is_err());
+
+        let mut invalid_event = calendar_event_request();
+        invalid_event.reminder_days = 31;
+        assert!(validate_calendar_event(invalid_event).is_err());
+    }
+
+    #[test]
+    fn weekly_classes_require_valid_ranges_and_weekdays() {
+        let mut class = calendar_event_request();
+        class.event_type = "class".to_owned();
+        class.schedule = "weekly".to_owned();
+        class.event_date = None;
+        class.start_date = Some("2025-09-01".to_owned());
+        class.end_date = Some("2025-12-31".to_owned());
+        class.weekdays = vec![2, 1, 2];
+
+        let valid_class = validate_calendar_event(class).unwrap();
+        assert_eq!(valid_class.weekdays, vec![1, 2]);
+
+        let mut invalid_class = calendar_event_request();
+        invalid_class.event_type = "class".to_owned();
+        invalid_class.schedule = "weekly".to_owned();
+        invalid_class.event_date = None;
+        invalid_class.start_date = Some("2025-12-31".to_owned());
+        invalid_class.end_date = Some("2025-09-01".to_owned());
+        invalid_class.weekdays = vec![1];
+        assert!(validate_calendar_event(invalid_class).is_err());
+
+        let mut invalid_class = calendar_event_request();
+        invalid_class.event_type = "class".to_owned();
+        invalid_class.schedule = "weekly".to_owned();
+        invalid_class.event_date = None;
+        invalid_class.start_date = Some("2025-09-01".to_owned());
+        invalid_class.end_date = Some("2025-12-31".to_owned());
+        invalid_class.weekdays = vec![0];
+        assert!(validate_calendar_event(invalid_class).is_err());
     }
 
     #[test]

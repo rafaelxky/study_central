@@ -58,15 +58,21 @@ All endpoints are served under `/api`. Successful account creation and login set
 | `POST` | `/api/tasks` | Add a task with `{ "text": "..." }` |
 | `PATCH` | `/api/tasks/{id}` | Mark a task complete or incomplete with `{ "completed": true }` |
 | `DELETE` | `/api/tasks/{id}` | Remove a task owned by the signed-in user |
+| `GET` | `/api/calendar/events` | List the signed-in user's calendar events and classes |
+| `POST` | `/api/calendar/events` | Create a one-day event or weekly class with title, description, color, schedule, and reminder settings |
+| `PUT` | `/api/calendar/events/{id}` | Update a calendar item owned by the signed-in user |
+| `DELETE` | `/api/calendar/events/{id}` | Delete a calendar item owned by the signed-in user |
 | `GET` | `/api/integrations/university/token` | Return whether this user has a saved token and whether encrypted token storage is enabled |
 | `PUT` | `/api/integrations/university/token` | Save or replace the signed-in user's JWT with `{ "token": "..." }` |
 | `DELETE` | `/api/integrations/university/token` | Delete the signed-in user's saved JWT |
 
 Shortcut responses include `id`, `name`, `url`, and `icon_data`. `icon_data` is a data URL when a supported favicon was found; otherwise it is `null`. Shortcut URLs without a scheme are treated as HTTPS. Duplicate URLs are rejected per account.
 
+Calendar create/update requests use `event_type: "event"` with `schedule: "once"` and an `event_date`, or `event_type: "class"` with `schedule: "weekly"`, inclusive `start_date`/`end_date`, and ISO weekday numbers in `weekdays`. Dates use `YYYY-MM-DD`; optional `start_time` and `end_time` must be supplied together. `reminder_days` ranges from 0 (off) to 30.
+
 ## Security notes
 
-Passwords are hashed with Argon2id. Session tokens are random, stored in the database only as SHA-256 hashes, and sent in HttpOnly cookies. Shortcuts, notes, tasks, and deletion operations are scoped to the authenticated user. Note titles are limited to 120 characters, note content to 50,000 characters, and task text to 300 characters.
+Passwords are hashed with Argon2id. Session tokens are random, stored in the database only as SHA-256 hashes, and sent in HttpOnly cookies. Shortcuts, notes, tasks, calendar events, and deletion operations are scoped to the authenticated user. Note titles are limited to 120 characters, note content to 50,000 characters, and task text to 300 characters. Calendar titles are limited to 120 characters, descriptions to 4,000 characters, reminders to 30 days, and class weekdays use ISO numbering (Monday=1 through Sunday=7).
 
 University tokens are encrypted with AES-256-GCM before being written to SQLite. The encryption key comes from `JWT_ENCRYPTION_KEY` and is never stored in the database. The API never returns a saved token; it returns only whether one is saved and its update time. Tokens may be opaque values or JWTs; input is limited to 16 KB and cannot contain whitespace or control characters. The backend does not verify the token or use it to sign in to or navigate the university website.
 

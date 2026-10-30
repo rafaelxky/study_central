@@ -14,8 +14,11 @@ type IconName =
   | 'notes'
   | 'pin'
   | 'check'
+  | 'calendar'
+  | 'clock'
+  | 'edit'
 type AuthMode = 'login' | 'register'
-type WorkspacePage = 'dashboard' | 'notes'
+type WorkspacePage = 'dashboard' | 'notes' | 'calendar' | 'notifications'
 
 type User = {
   id: string
@@ -68,6 +71,36 @@ type TasksResponse = {
   error?: string
 }
 
+type CalendarEvent = {
+  id: string
+  title: string
+  description: string
+  color: string
+  event_type: 'event' | 'class'
+  schedule: 'once' | 'weekly'
+  event_date: string | null
+  start_date: string | null
+  end_date: string | null
+  weekdays: number[]
+  start_time: string | null
+  end_time: string | null
+  reminder_days: number
+}
+
+type CalendarEventsResponse = {
+  events?: CalendarEvent[]
+  event?: CalendarEvent
+  error?: string
+}
+
+type CalendarEventDraft = Omit<CalendarEvent, 'id'>
+
+type CalendarReminder = {
+  event: CalendarEvent
+  occurrenceDate: string
+  reminderDate: string
+}
+
 type UniversityTokenStatus = {
   enabled: boolean
   saved: boolean
@@ -76,6 +109,122 @@ type UniversityTokenStatus = {
 }
 
 const CACHED_USER_KEY = 'studyspace.cached-user'
+const CALENDAR_COLORS = [
+  { value: '#bda7f5', label: 'Lavender' },
+  { value: '#f2a6a0', label: 'Coral' },
+  { value: '#f2c879', label: 'Amber' },
+  { value: '#83c9ad', label: 'Mint' },
+  { value: '#83b8e8', label: 'Blue' },
+  { value: '#d99bc8', label: 'Pink' },
+]
+const WEEKDAYS = [
+  { value: 1, short: 'Mon', label: 'Monday' },
+  { value: 2, short: 'Tue', label: 'Tuesday' },
+  { value: 3, short: 'Wed', label: 'Wednesday' },
+  { value: 4, short: 'Thu', label: 'Thursday' },
+  { value: 5, short: 'Fri', label: 'Friday' },
+  { value: 6, short: 'Sat', label: 'Saturday' },
+  { value: 7, short: 'Sun', label: 'Sunday' },
+]
+
+function localDateString(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function parseLocalDate(date: string): Date {
+  const [year, month, day] = date.split('-').map(Number)
+  return new Date(year, month - 1, day)
+}
+
+function shiftDate(date: string, days: number): string {
+  const shifted = parseLocalDate(date)
+  shifted.setDate(shifted.getDate() + days)
+  return localDateString(shifted)
+}
+
+function formatCalendarDate(date: string, options?: Intl.DateTimeFormatOptions): string {
+  return parseLocalDate(date).toLocaleDateString(undefined, options ?? {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
+
+function formatReminderDate(date: string, today: string): string {
+  const [year, month, day] = date.split('-').map(Number)
+  const [todayYear, todayMonth, todayDay] = today.split('-').map(Number)
+  const dayDifference = (
+    Date.UTC(year, month - 1, day) - Date.UTC(todayYear, todayMonth - 1, todayDay)
+  ) / 86_400_000
+  if (dayDifference === 0) return 'Today'
+  if (dayDifference === 1) return 'Tomorrow'
+  return `In ${dayDifference} days`
+}
+
+function eventOccursOnDate(event: CalendarEvent, date: string): boolean {
+  if (event.schedule === 'once') return event.event_date === date
+  if (!event.start_date || !event.end_date || date < event.start_date || date > event.end_date) return false
+  const weekday = parseLocalDate(date).getDay() || 7
+  return event.weekdays.includes(weekday)
+}
+
+function getCalendarReminders(events: CalendarEvent[], today = localDateString(new Date())): CalendarReminder[] {
+  const reminders: CalendarReminder[] = []
+  for (const event of events) {
+    if (event.reminder_days === 0) continue
+    for (let offset = 0; offset <= 60; offset += 1) {
+      const occurrenceDate = shiftDate(today, offset)
+      if (!eventOccursOnDate(event, occurrenceDate)) continue
+      const reminderDate = shiftDate(occurrenceDate, -event.reminder_days)
+      if (reminderDate >= today && reminderDate <= shiftDate(today, 30)) {
+        reminders.push({ event, occurrenceDate, reminderDate })
+      }
+    }
+  }
+  return reminders.sort((a, b) =>
+    a.reminderDate.localeCompare(b.reminderDate)
+      || a.occurrenceDate.localeCompare(b.occurrenceDate)
+      || a.event.title.localeCompare(b.event.title),
+  )
+}
+
+function workspacePageFromPath(pathname: string): WorkspacePage {
+  if (pathname === '/notes') return 'notes'
+  if (pathname === '/calendar') return 'calendar'
+  if (pathname === '/notifications') return 'notifications'
+  return 'dashboard'
+}
+
+function makeCalendarDraft(date: string): CalendarEventDraft {
+  return {
+    title: '',
+    description: '',
+    color: CALENDAR_COLORS[0].value,
+    event_type: 'event',
+    schedule: 'once',
+    event_date: date,
+    start_date: date,
+    end_date: shiftDate(date, 90),
+    weekdays: [],
+    start_time: null,
+    end_time: null,
+    reminder_days: 0,
+  }
+}
+
+function getCalendarMonthDates(month: Date): string[] {
+  const firstDay = new Date(month.getFullYear(), month.getMonth(), 1)
+  const offset = (firstDay.getDay() + 6) % 7
+  const firstCell = new Date(firstDay.getFullYear(), firstDay.getMonth(), 1 - offset)
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(firstCell)
+    date.setDate(firstCell.getDate() + index)
+    return localDateString(date)
+  })
+}
 
 async function readApiResponse<T extends { error?: string }>(
   response: Response,
@@ -154,6 +303,9 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
     notes: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 13h8m-8 4h8" /></>,
     pin: <><path d="m16 3 5 5-4 1-4 4 1 4-2 2-3-5-5-3 2-2 4 1 4-4z" /><path d="m9 15-6 6" /></>,
     check: <><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></>,
+    calendar: <><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M16 3v4M8 3v4M3 11h18" /></>,
+    clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
+    edit: <><path d="m15 5 4 4M4 20l4-.8L19 8a2.1 2.1 0 0 0-3-3L5 16z" /></>,
   }
 
   return (
@@ -231,6 +383,21 @@ async function tasksRequest(
   return readApiResponse<TasksResponse>(response, 'Could not manage tasks.')
 }
 
+async function calendarEventsRequest(
+  path = '',
+  options: { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: object } = {},
+): Promise<CalendarEventsResponse> {
+  const response = await fetch(`/api/calendar/events${path}`, {
+    method: options.method ?? 'GET',
+    headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
+    credentials: 'same-origin',
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  })
+
+  if (response.status === 204) return {}
+  return readApiResponse<CalendarEventsResponse>(response, 'Could not manage calendar events.')
+}
+
 async function universityTokenRequest(
   options: { method?: 'GET' | 'PUT' | 'DELETE'; token?: string } = {},
 ): Promise<UniversityTokenStatus> {
@@ -248,9 +415,7 @@ async function universityTokenRequest(
 
 function App() {
   const [user, setUser] = useState<User | null>(() => readCachedUser())
-  const [activePage, setActivePage] = useState<WorkspacePage>(() =>
-    window.location.pathname === '/notes' ? 'notes' : 'dashboard',
-  )
+  const [activePage, setActivePage] = useState<WorkspacePage>(() => workspacePageFromPath(window.location.pathname))
   const [authChecked, setAuthChecked] = useState(false)
   const [mode, setMode] = useState<AuthMode>('login')
   const [username, setUsername] = useState('')
@@ -261,13 +426,28 @@ function App() {
   const [shortcuts, setShortcuts] = useState<Shortcut[]>([])
   const [notes, setNotes] = useState<Note[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([])
   const [shortcutsLoading, setShortcutsLoading] = useState(() => user !== null)
   const [notesLoading, setNotesLoading] = useState(() => user !== null)
   const [tasksLoading, setTasksLoading] = useState(() => user !== null)
+  const [calendarLoading, setCalendarLoading] = useState(() => user !== null)
   const [notesError, setNotesError] = useState('')
   const [tasksError, setTasksError] = useState('')
   const [taskDraft, setTaskDraft] = useState('')
   const [taskSaving, setTaskSaving] = useState(false)
+  const [calendarError, setCalendarError] = useState('')
+  const [calendarEditorOpen, setCalendarEditorOpen] = useState(false)
+  const [calendarSaving, setCalendarSaving] = useState(false)
+  const [calendarEditorError, setCalendarEditorError] = useState('')
+  const [editingCalendarEventId, setEditingCalendarEventId] = useState<string | null>(null)
+  const [calendarDraft, setCalendarDraft] = useState<CalendarEventDraft>(() => makeCalendarDraft(localDateString(new Date())))
+  const [calendarToday] = useState(() => localDateString(new Date()))
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const today = parseLocalDate(calendarToday)
+    return new Date(today.getFullYear(), today.getMonth(), 1)
+  })
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState(calendarToday)
+  const [notificationDropdownOpen, setNotificationDropdownOpen] = useState(false)
   const [noteEditorOpen, setNoteEditorOpen] = useState(false)
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null)
   const [noteTitle, setNoteTitle] = useState('')
@@ -296,7 +476,7 @@ function App() {
   useEffect(() => {
     let active = true
     const handlePopState = () => {
-      setActivePage(window.location.pathname === '/notes' ? 'notes' : 'dashboard')
+      setActivePage(workspacePageFromPath(window.location.pathname))
     }
     window.addEventListener('popstate', handlePopState)
 
@@ -307,12 +487,14 @@ function App() {
         setUser(currentUser ?? null)
         cacheUser(currentUser ?? null)
         const destination = currentUser
-          ? window.location.pathname === '/notes' ? '/notes' : '/'
+          ? ['/', '/notes', '/calendar', '/notifications'].includes(window.location.pathname)
+            ? window.location.pathname
+            : '/'
           : '/login'
         if (window.location.pathname !== destination) {
           window.history.replaceState(null, '', destination)
         }
-        setActivePage(destination === '/notes' ? 'notes' : 'dashboard')
+        setActivePage(workspacePageFromPath(destination))
         if (currentUser) {
           setShortcutsLoading(true)
           try {
@@ -345,6 +527,17 @@ function App() {
           } finally {
             if (active) setTasksLoading(false)
           }
+          setCalendarLoading(true)
+          try {
+            const result = await calendarEventsRequest()
+            if (active) setCalendarEvents(result.events ?? [])
+          } catch (requestError) {
+            if (active) {
+              setCalendarError(requestError instanceof Error ? requestError.message : 'Could not load calendar events.')
+            }
+          } finally {
+            if (active) setCalendarLoading(false)
+          }
           try {
             const tokenStatus = await universityTokenRequest()
             if (active) setUniversityTokenStatus(tokenStatus)
@@ -374,6 +567,7 @@ function App() {
           setShortcutsLoading(false)
           setNotesLoading(false)
           setTasksLoading(false)
+          setCalendarLoading(false)
           setAuthChecked(true)
         }
       }
@@ -404,6 +598,7 @@ function App() {
       setShortcutsLoading(true)
       setNotesLoading(true)
       setTasksLoading(true)
+      setCalendarLoading(true)
       try {
         const shortcutResult = await shortcutsRequest()
         setShortcuts(shortcutResult.shortcuts ?? [])
@@ -429,6 +624,15 @@ function App() {
         setTasksLoading(false)
       }
       try {
+        const calendarResult = await calendarEventsRequest()
+        setCalendarEvents(calendarResult.events ?? [])
+        setCalendarError('')
+      } catch (requestError) {
+        setCalendarError(requestError instanceof Error ? requestError.message : 'Could not load calendar events.')
+      } finally {
+        setCalendarLoading(false)
+      }
+      try {
         setUniversityTokenStatus(await universityTokenRequest())
         setUniversityTokenError('')
       } catch (requestError) {
@@ -441,6 +645,7 @@ function App() {
         window.history.replaceState(null, '', '/')
       }
       setActivePage('dashboard')
+      setNotificationDropdownOpen(false)
     } catch (requestError) {
       const message = requestError instanceof Error ? requestError.message : 'Authentication failed.'
       setError(message)
@@ -463,6 +668,7 @@ function App() {
       setShortcuts([])
       setNotes([])
       setTasks([])
+      setCalendarEvents([])
       setTaskDraft('')
       setSearch('')
       setUniversityTokenStatus({ enabled: false, saved: false, updated_at: null })
@@ -470,6 +676,7 @@ function App() {
       setUniversityTokenError('')
       setUniversityTokenMessage('')
       setActivePage('dashboard')
+      setNotificationDropdownOpen(false)
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Could not log out.')
     }
@@ -505,14 +712,6 @@ function App() {
     } catch (requestError) {
       setDashboardError(requestError instanceof Error ? requestError.message : 'Could not remove shortcut.')
     }
-  }
-
-  function navigateTo(page: WorkspacePage) {
-    const path = page === 'notes' ? '/notes' : '/'
-    if (window.location.pathname !== path) {
-      window.history.pushState(null, '', path)
-    }
-    setActivePage(page)
   }
 
   function openNoteEditor(note?: Note) {
@@ -625,6 +824,74 @@ function App() {
     }
   }
 
+  function navigateTo(page: WorkspacePage) {
+    const path = page === 'dashboard'
+      ? '/'
+      : page === 'notes' ? '/notes' : page === 'calendar' ? '/calendar' : '/notifications'
+    if (window.location.pathname !== path) {
+      window.history.pushState(null, '', path)
+    }
+    setActivePage(page)
+    setNotificationDropdownOpen(false)
+  }
+
+  function openCalendarEditor(event?: CalendarEvent, date = selectedCalendarDate) {
+    setEditingCalendarEventId(event?.id ?? null)
+    setCalendarDraft(event ? {
+      title: event.title,
+      description: event.description,
+      color: event.color,
+      event_type: event.event_type,
+      schedule: event.schedule,
+      event_date: event.event_date,
+      start_date: event.start_date,
+      end_date: event.end_date,
+      weekdays: [...event.weekdays],
+      start_time: event.start_time,
+      end_time: event.end_time,
+      reminder_days: event.reminder_days,
+    } : makeCalendarDraft(date))
+    setCalendarEditorError('')
+    setCalendarEditorOpen(true)
+  }
+
+  async function submitCalendarEvent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setCalendarSaving(true)
+    setCalendarEditorError('')
+    try {
+      const result = await calendarEventsRequest(
+        editingCalendarEventId ? `/${encodeURIComponent(editingCalendarEventId)}` : '',
+        { method: editingCalendarEventId ? 'PUT' : 'POST', body: calendarDraft },
+      )
+      const savedEvent = result.event
+      if (!savedEvent) throw new Error('The server did not return the saved calendar item.')
+      setCalendarEvents((current) => [
+        savedEvent,
+        ...current.filter((currentEvent) => currentEvent.id !== savedEvent.id),
+      ])
+      setCalendarEditorOpen(false)
+    } catch (requestError) {
+      setCalendarEditorError(requestError instanceof Error ? requestError.message : 'Could not save calendar item.')
+    } finally {
+      setCalendarSaving(false)
+    }
+  }
+
+  async function removeCalendarEvent(event: CalendarEvent) {
+    setCalendarError('')
+    try {
+      await calendarEventsRequest(`/${encodeURIComponent(event.id)}`, { method: 'DELETE' })
+      setCalendarEvents((current) => current.filter((currentEvent) => currentEvent.id !== event.id))
+    } catch (requestError) {
+      setCalendarError(requestError instanceof Error ? requestError.message : 'Could not delete calendar item.')
+    }
+  }
+
+  function changeCalendarMonth(amount: number) {
+    setCalendarMonth((current) => new Date(current.getFullYear(), current.getMonth() + amount, 1))
+  }
+
   async function saveUniversityToken(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setUniversityTokenBusy(true)
@@ -668,7 +935,9 @@ function App() {
   const filteredShortcuts = shortcuts.filter((shortcut) =>
     `${shortcut.name} ${shortcut.url}`.toLowerCase().includes(search.toLowerCase()),
   )
-
+  const calendarReminders = getCalendarReminders(calendarEvents, calendarToday)
+  const calendarDates = getCalendarMonthDates(calendarMonth)
+  const selectedDateEvents = calendarEvents.filter((event) => eventOccursOnDate(event, selectedCalendarDate))
   if (!authChecked) {
     return (
       <main className="auth-page" role="status">
@@ -771,11 +1040,27 @@ function App() {
             <span>Notes</span>
             {notes.length > 0 && <span className="sidebar-nav-count">{notes.length}</span>}
           </button>
+          <button
+            aria-current={activePage === 'calendar' ? 'page' : undefined}
+            className={`sidebar-nav-item ${activePage === 'calendar' ? 'sidebar-nav-item-active' : ''}`}
+            onClick={() => navigateTo('calendar')}
+            type="button"
+          >
+            <Icon name="calendar" size={17} />
+            <span>Calendar</span>
+          </button>
         </nav>
       </aside>
       <main className="main-content">
         <header className="topbar">
-          <div className="breadcrumb"><span>Workspace</span><Icon name="chevron" size={15} /><strong>{activePage === 'notes' ? 'Notes' : 'Overview'}</strong></div>
+          <div className="breadcrumb">
+            <span>Workspace</span><Icon name="chevron" size={15} />
+            <strong>
+              {activePage === 'notes' ? 'Notes'
+                : activePage === 'calendar' ? 'Calendar'
+                  : activePage === 'notifications' ? 'Notifications' : 'Overview'}
+            </strong>
+          </div>
           <div className="topbar-actions">
             {activePage === 'dashboard' && (
               <label className="search-box">
@@ -790,10 +1075,55 @@ function App() {
                 <kbd>/</kbd>
               </label>
             )}
-            <button className="icon-button notification-button" type="button" aria-label="Notifications">
-              <Icon name="bell" size={19} />
-              <span />
-            </button>
+            <div className="notification-menu-wrap">
+              <button
+                aria-expanded={notificationDropdownOpen}
+                aria-label={`Notifications${calendarReminders.length ? ` (${calendarReminders.length})` : ''}`}
+                className="icon-button notification-button"
+                onClick={() => setNotificationDropdownOpen((open) => !open)}
+                type="button"
+              >
+                <Icon name="bell" size={19} />
+                {calendarReminders.length > 0 && <span>{calendarReminders.length > 9 ? '9+' : calendarReminders.length}</span>}
+              </button>
+              {notificationDropdownOpen && (
+                <div className="notification-dropdown">
+                  <div className="notification-dropdown-heading">
+                    <strong>Upcoming reminders</strong>
+                    <span>{calendarReminders.length}</span>
+                  </div>
+                  {calendarReminders.length === 0 ? (
+                    <p className="notification-empty">No upcoming reminders. Set reminders on calendar items to see them here.</p>
+                  ) : (
+                    <ul>
+                      {calendarReminders.slice(0, 5).map((reminder) => (
+                        <li key={`${reminder.event.id}-${reminder.occurrenceDate}`}>
+                          <span className="notification-color" style={{ backgroundColor: reminder.event.color }} />
+                          <button
+                            className="notification-item"
+                            onClick={() => {
+                              setSelectedCalendarDate(reminder.occurrenceDate)
+                              setCalendarMonth(() => {
+                                const date = parseLocalDate(reminder.occurrenceDate)
+                                return new Date(date.getFullYear(), date.getMonth(), 1)
+                              })
+                              navigateTo('calendar')
+                            }}
+                            type="button"
+                          >
+                            <strong>{reminder.event.title}</strong>
+                            <span>{formatReminderDate(reminder.reminderDate, calendarToday)} · {formatCalendarDate(reminder.occurrenceDate, { month: 'short', day: 'numeric' })}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <button className="notification-see-all" onClick={() => navigateTo('notifications')} type="button">
+                    See all reminders
+                  </button>
+                </div>
+              )}
+            </div>
             <div className="account-actions">
               <div className="account-avatar" aria-label={`Signed in as ${user.username}`}>
                 {user.username.slice(0, 1).toUpperCase()}
@@ -967,7 +1297,7 @@ function App() {
               )}
             </section>
           </section>
-        ) : (
+        ) : activePage === 'notes' ? (
           <section className="dashboard notes-page">
             <div className="dashboard-heading">
               <div>
@@ -1022,8 +1352,374 @@ function App() {
               </div>
             )}
           </section>
+        ) : activePage === 'calendar' ? (
+          <section className="dashboard calendar-page">
+            <div className="dashboard-heading">
+              <div>
+                <p className="dashboard-eyebrow">PLAN YOUR STUDY</p>
+                <h1>Calendar</h1>
+                <p className="dashboard-description">Keep tests, events, and weekly classes in one place.</p>
+              </div>
+              <button className="add-shortcut-button" onClick={() => openCalendarEditor()} type="button">
+                <Icon name="plus" size={17} /> Add event or class
+              </button>
+            </div>
+            {calendarError && <p className="global-error" role="alert">{calendarError}</p>}
+            {calendarLoading ? (
+              <div className="shortcuts-message">Loading your calendar…</div>
+            ) : (
+              <>
+                <section className="calendar-month" aria-label="Monthly calendar">
+                  <div className="calendar-month-heading">
+                    <div>
+                      <p className="dashboard-eyebrow">MONTH VIEW</p>
+                      <h2>{calendarMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</h2>
+                    </div>
+                    <div className="calendar-month-actions">
+                      <button className="calendar-nav-button" aria-label="Previous month" onClick={() => changeCalendarMonth(-1)} type="button">‹</button>
+                      <button
+                        className="calendar-today-button"
+                        onClick={() => {
+                          const today = localDateString(new Date())
+                          setSelectedCalendarDate(today)
+                          setCalendarMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1))
+                        }}
+                        type="button"
+                      >
+                        Today
+                      </button>
+                      <button className="calendar-nav-button" aria-label="Next month" onClick={() => changeCalendarMonth(1)} type="button">›</button>
+                    </div>
+                  </div>
+                  <div className="calendar-weekdays" aria-hidden="true">
+                    {WEEKDAYS.map((day) => <span key={day.value}>{day.short}</span>)}
+                  </div>
+                  <div className="calendar-month-grid">
+                    {calendarDates.map((date) => {
+                      const dayEvents = calendarEvents.filter((event) => eventOccursOnDate(event, date))
+                      const inMonth = parseLocalDate(date).getMonth() === calendarMonth.getMonth()
+                      return (
+                        <div
+                          className={`calendar-day-cell ${inMonth ? '' : 'calendar-day-outside'} ${date === selectedCalendarDate ? 'calendar-day-selected' : ''} ${date === calendarToday ? 'calendar-day-today' : ''}`}
+                          key={date}
+                        >
+                          <button
+                            aria-label={formatCalendarDate(date)}
+                            aria-pressed={date === selectedCalendarDate}
+                            className="calendar-day-number"
+                            onClick={() => setSelectedCalendarDate(date)}
+                            type="button"
+                          >
+                            {parseLocalDate(date).getDate()}
+                          </button>
+                          <div className="calendar-day-items">
+                            {dayEvents.slice(0, 3).map((calendarEvent) => (
+                              <button
+                                className="calendar-day-event"
+                                key={calendarEvent.id}
+                                onClick={() => {
+                                  setSelectedCalendarDate(date)
+                                  openCalendarEditor(calendarEvent, date)
+                                }}
+                                style={{ '--event-color': calendarEvent.color } as React.CSSProperties}
+                                title={calendarEvent.title}
+                                type="button"
+                              >
+                                <span />
+                                {calendarEvent.title}
+                              </button>
+                            ))}
+                            {dayEvents.length > 3 && <span className="calendar-day-more">+{dayEvents.length - 3} more</span>}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </section>
+
+                <section className="calendar-selected-day" aria-labelledby="selected-day-heading">
+                  <div className="section-heading">
+                    <div>
+                      <p className="dashboard-eyebrow">SCHEDULE</p>
+                      <h2 id="selected-day-heading">{formatCalendarDate(selectedCalendarDate, { weekday: 'long', month: 'long', day: 'numeric' })}</h2>
+                    </div>
+                    <button className="text-action" onClick={() => openCalendarEditor(undefined, selectedCalendarDate)} type="button">
+                      <Icon name="plus" size={15} /> Add to this day
+                    </button>
+                  </div>
+                  {selectedDateEvents.length === 0 ? (
+                    <p className="calendar-no-events">Nothing scheduled for this day.</p>
+                  ) : (
+                    <div className="calendar-event-list">
+                      {selectedDateEvents.map((calendarEvent) => (
+                        <article className="calendar-event-row" key={calendarEvent.id}>
+                          <span className="calendar-event-accent" style={{ backgroundColor: calendarEvent.color }} />
+                          <div className="calendar-event-content">
+                            <div className="calendar-event-title-line">
+                              <span className="calendar-event-kind">{calendarEvent.event_type === 'class' ? 'Weekly class' : 'Event'}</span>
+                              <strong>{calendarEvent.title}</strong>
+                            </div>
+                            {(calendarEvent.start_time || calendarEvent.description) && (
+                              <p className="calendar-event-meta">
+                                {calendarEvent.start_time && (
+                                  <span><Icon name="clock" size={13} /> {calendarEvent.start_time}–{calendarEvent.end_time}</span>
+                                )}
+                                {calendarEvent.description && <span>{calendarEvent.description}</span>}
+                              </p>
+                            )}
+                          </div>
+                          {calendarEvent.reminder_days > 0 && (
+                            <span className="calendar-reminder-tag">{calendarEvent.reminder_days}d reminder</span>
+                          )}
+                          <button aria-label={`Edit ${calendarEvent.title}`} className="calendar-item-button" onClick={() => openCalendarEditor(calendarEvent, selectedCalendarDate)} type="button">
+                            <Icon name="edit" size={15} />
+                          </button>
+                          <button aria-label={`Delete ${calendarEvent.title}`} className="calendar-item-button calendar-item-delete" onClick={() => void removeCalendarEvent(calendarEvent)} type="button">
+                            <Icon name="trash" size={15} />
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              </>
+            )}
+          </section>
+        ) : (
+          <section className="dashboard notifications-page">
+            <div className="dashboard-heading">
+              <div>
+                <p className="dashboard-eyebrow">YOUR STUDYSPACE</p>
+                <h1>Notifications</h1>
+                <p className="dashboard-description">Upcoming reminders from your calendar. These appear in the bell menu.</p>
+              </div>
+              <button className="text-action" onClick={() => navigateTo('calendar')} type="button">
+                Open calendar <Icon name="chevron" size={15} />
+              </button>
+            </div>
+            {calendarError && <p className="global-error" role="alert">{calendarError}</p>}
+            {calendarLoading ? (
+              <div className="shortcuts-message">Loading reminders…</div>
+            ) : calendarReminders.length === 0 ? (
+              <div className="empty-shortcuts">
+                <span className="empty-shortcuts-icon"><Icon name="bell" size={22} /></span>
+                <h2>No upcoming reminders</h2>
+                <p>Add a reminder to an event or weekly class and it will appear here on the days before it occurs.</p>
+                <button className="add-shortcut-button" onClick={() => navigateTo('calendar')} type="button">
+                  <Icon name="calendar" size={16} /> Go to calendar
+                </button>
+              </div>
+            ) : (
+              <div className="notification-list">
+                {calendarReminders.map((reminder) => (
+                  <button
+                    className="notification-card"
+                    key={`${reminder.event.id}-${reminder.occurrenceDate}`}
+                    onClick={() => {
+                      setSelectedCalendarDate(reminder.occurrenceDate)
+                      const date = parseLocalDate(reminder.occurrenceDate)
+                      setCalendarMonth(new Date(date.getFullYear(), date.getMonth(), 1))
+                      navigateTo('calendar')
+                    }}
+                    type="button"
+                  >
+                    <span className="notification-card-color" style={{ backgroundColor: reminder.event.color }} />
+                    <span className="notification-card-copy">
+                      <strong>{reminder.event.title}</strong>
+                      <span>{reminder.event.event_type === 'class' ? 'Weekly class' : 'Event'} · {reminder.event.description || 'No description'}</span>
+                    </span>
+                    <span className="notification-card-dates">
+                      <strong>{formatReminderDate(reminder.reminderDate, calendarToday)}</strong>
+                      <span>For {formatCalendarDate(reminder.occurrenceDate, { weekday: 'short', month: 'short', day: 'numeric' })}</span>
+                    </span>
+                    <Icon name="chevron" size={16} />
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
         )}
       </main>
+
+      {calendarEditorOpen && (
+        <div
+          className="auth-overlay"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setCalendarEditorOpen(false)
+          }}
+        >
+          <section aria-labelledby="calendar-editor-title" aria-modal="true" className="auth-dialog calendar-editor-dialog" role="dialog">
+            <button aria-label="Close" className="auth-close" onClick={() => setCalendarEditorOpen(false)} type="button">×</button>
+            <span className="university-icon"><Icon name="calendar" size={19} /></span>
+            <p className="auth-eyebrow">YOUR STUDYSPACE</p>
+            <h1 id="calendar-editor-title">{editingCalendarEventId ? 'Edit calendar item' : 'Add to calendar'}</h1>
+            <p className="auth-subtitle">Create a one-day event or a weekly class that repeats in a date range.</p>
+            <form className="auth-form calendar-editor-form" onSubmit={submitCalendarEvent}>
+              <label>
+                Type
+                <select
+                  onChange={(event) => {
+                    const eventType = event.target.value as CalendarEvent['event_type']
+                    setCalendarDraft((current) => eventType === 'class'
+                      ? {
+                        ...current,
+                        event_type: 'class',
+                        schedule: 'weekly',
+                        event_date: null,
+                        start_date: selectedCalendarDate,
+                        end_date: shiftDate(selectedCalendarDate, 90),
+                        weekdays: [parseLocalDate(selectedCalendarDate).getDay() || 7],
+                      }
+                      : {
+                        ...current,
+                        event_type: 'event',
+                        schedule: 'once',
+                        event_date: selectedCalendarDate,
+                        start_date: null,
+                        end_date: null,
+                        weekdays: [],
+                      })
+                  }}
+                  value={calendarDraft.event_type}
+                >
+                  <option value="event">One-day event (test, deadline, etc.)</option>
+                  <option value="class">Weekly class</option>
+                </select>
+              </label>
+              <label>
+                Title
+                <input
+                  autoFocus
+                  maxLength={120}
+                  onChange={(event) => setCalendarDraft((current) => ({ ...current, title: event.target.value }))}
+                  required
+                  value={calendarDraft.title}
+                />
+              </label>
+              <label>
+                Description
+                <textarea
+                  maxLength={4000}
+                  onChange={(event) => setCalendarDraft((current) => ({ ...current, description: event.target.value }))}
+                  placeholder="Add useful details…"
+                  value={calendarDraft.description}
+                />
+              </label>
+              {calendarDraft.event_type === 'event' ? (
+                <label>
+                  Date
+                  <input
+                    onChange={(event) => {
+                      setSelectedCalendarDate(event.target.value)
+                      const date = parseLocalDate(event.target.value)
+                      setCalendarMonth(new Date(date.getFullYear(), date.getMonth(), 1))
+                      setCalendarDraft((current) => ({ ...current, event_date: event.target.value }))
+                    }}
+                    required
+                    type="date"
+                    value={calendarDraft.event_date ?? ''}
+                  />
+                </label>
+              ) : (
+                <>
+                  <div className="calendar-date-range">
+                    <label>
+                      Starts
+                      <input
+                        onChange={(event) => setCalendarDraft((current) => ({ ...current, start_date: event.target.value }))}
+                        required
+                        type="date"
+                        value={calendarDraft.start_date ?? ''}
+                      />
+                    </label>
+                    <label>
+                      Ends
+                      <input
+                        onChange={(event) => setCalendarDraft((current) => ({ ...current, end_date: event.target.value }))}
+                        required
+                        type="date"
+                        value={calendarDraft.end_date ?? ''}
+                      />
+                    </label>
+                  </div>
+                  <fieldset className="calendar-weekday-picker">
+                    <legend>Repeats on</legend>
+                    <div>
+                      {WEEKDAYS.map((day) => (
+                        <label key={day.value} title={day.label}>
+                          <input
+                            checked={calendarDraft.weekdays.includes(day.value)}
+                            onChange={(event) => setCalendarDraft((current) => ({
+                              ...current,
+                              weekdays: event.target.checked
+                                ? [...current.weekdays, day.value].sort((a, b) => a - b)
+                                : current.weekdays.filter((weekday) => weekday !== day.value),
+                            }))}
+                            type="checkbox"
+                          />
+                          <span>{day.short}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                </>
+              )}
+              <div className="calendar-date-range">
+                <label>
+                  Starts at <span className="optional-label">optional</span>
+                  <input
+                    onChange={(event) => setCalendarDraft((current) => ({ ...current, start_time: event.target.value || null }))}
+                    type="time"
+                    value={calendarDraft.start_time ?? ''}
+                  />
+                </label>
+                <label>
+                  Ends at <span className="optional-label">optional</span>
+                  <input
+                    onChange={(event) => setCalendarDraft((current) => ({ ...current, end_time: event.target.value || null }))}
+                    type="time"
+                    value={calendarDraft.end_time ?? ''}
+                  />
+                </label>
+              </div>
+              <label>
+                Remind me
+                <select
+                  onChange={(event) => setCalendarDraft((current) => ({ ...current, reminder_days: Number(event.target.value) }))}
+                  value={calendarDraft.reminder_days}
+                >
+                  <option value={0}>No reminder</option>
+                  {Array.from({ length: 30 }, (_, index) => index + 1).map((days) => (
+                    <option key={days} value={days}>{days} {days === 1 ? 'day' : 'days'} before</option>
+                  ))}
+                </select>
+              </label>
+              <fieldset className="calendar-color-picker">
+                <legend>Color</legend>
+                <div>
+                  {CALENDAR_COLORS.map((color) => (
+                    <label key={color.value} title={color.label}>
+                      <input
+                        checked={calendarDraft.color === color.value}
+                        name="calendar-color"
+                        onChange={() => setCalendarDraft((current) => ({ ...current, color: color.value }))}
+                        type="radio"
+                        value={color.value}
+                      />
+                      <span style={{ backgroundColor: color.value }} />
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              {calendarEditorError && <p className="auth-error" role="alert">{calendarEditorError}</p>}
+              <p className="calendar-reminder-help">Reminders are shown in the bell menu and on the notifications page.</p>
+              <button className="auth-submit" disabled={calendarSaving} type="submit">
+                {calendarSaving ? 'Saving…' : editingCalendarEventId ? 'Save changes' : 'Add to calendar'}
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
 
       {noteEditorOpen && (
         <div
