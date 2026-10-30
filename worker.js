@@ -1,7 +1,7 @@
 const SESSION_SECONDS = 60 * 60 * 24 * 7;
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_UNIVERSITY_TOKEN_BYTES = 16 * 1024;
-const PASSWORD_ITERATIONS = 600_000;
+const PASSWORD_ITERATIONS = 50_000;
 const CALENDAR_COLORS = new Set([
   "#bda7f5",
   "#f2a6a0",
@@ -220,7 +220,7 @@ async function verifyPassword(password, hash) {
   const parts = hash.split("$");
   if (parts.length !== 4 || parts[0] !== "pbkdf2-sha256") return false;
   const iterations = Number(parts[1]);
-  if (!Number.isInteger(iterations) || iterations < 600_000 || iterations > 1_000_000) {
+  if (!Number.isInteger(iterations) || iterations !== PASSWORD_ITERATIONS) {
     return false;
   }
   let salt;

@@ -40,12 +40,11 @@ The local Rust backend fetches a site's `/favicon.ico` when a shortcut is added 
 
 The Worker serves the frontend and handles same-origin `/api` requests using D1. There is no separate API server or `API_ORIGIN`.
 
-1. Create a D1 database named `study-central` with `npm run d1:create`.
-2. Copy the `database_id` from Wrangler's output into `wrangler.toml`, replacing `REPLACE_WITH_D1_DATABASE_ID`, then commit that configuration.
-3. In the Worker's **Settings → Variables and Secrets**, add `JWT_ENCRYPTION_KEY` as a secret if you want to enable encrypted university-token storage. Use a randomly generated 32-byte (64-character hex) key and keep it stable; changing or losing it makes saved tokens unreadable.
-4. In the Cloudflare Workers Builds settings, set the build command to `npm run build` and the deploy command to `npm run deploy:worker`. The deploy script applies D1 migrations and then deploys the Worker. Cloudflare must have permission to deploy the Worker and apply D1 migrations.
+1. The `study-central` D1 database is configured in `wrangler.toml` with database ID `41665065-15cb-46a3-a96b-c290c04b96d1`. If recreating the database, create it with `npm run d1:create` and replace the ID in `wrangler.toml` with the new one.
+2. In the Worker's **Settings → Variables and Secrets**, add `JWT_ENCRYPTION_KEY` as a secret if you want to enable encrypted university-token storage. Use a randomly generated 32-byte (64-character hex) key and keep it stable; changing or losing it makes saved tokens unreadable.
+3. In the Cloudflare Workers Builds settings, set the build command to `npm run build` and the deploy command to `npm run deploy:worker`. The deploy script applies D1 migrations and then deploys the Worker. Cloudflare must have permission to deploy the Worker and apply D1 migrations.
 
-This password-hashing configuration requires the Workers Paid plan: the Worker requests a 30-second CPU limit per request, while the Free plan allows 10 ms. See [Cloudflare Workers limits](https://developers.cloudflare.com/workers/platform/limits/#cpu-time).
+The Worker uses PBKDF2-SHA256 with 50,000 iterations to target Cloudflare Workers Free's 10 ms CPU budget. This is a security compromise versus the stronger password-hashing settings recommended for production. See [Cloudflare Workers limits](https://developers.cloudflare.com/workers/platform/limits/#cpu-time). Upgrade to Workers Paid and use a stronger password hash before relying on this for sensitive or production accounts.
 
 After a successful deployment, open the Worker URL shown in Cloudflare's Worker overview. Existing SQLite data and accounts are not imported automatically. New Worker accounts use PBKDF2-SHA256 password hashes, so moving existing accounts requires a separate data and password-transition plan.
 
