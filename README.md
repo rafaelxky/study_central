@@ -58,6 +58,10 @@ sudo systemctl reload nginx
 
 This configuration serves HTTP only. Configure TLS with your deployment's certificate before exposing the site publicly, then set `COOKIE_SECURE=true` for the backend.
 
+## Cloudflare Pages
+
+The repository root is configured as an npm workspace so Cloudflare Pages can install dependencies from the repository root. The root `wrangler.toml` sets the static build output to `frontend/dist`; use `npm run build` as the build command. The Rust API is not deployed by Pages and must be hosted separately, with `/api` routed to that backend.
+
 ## Backend configuration
 
 - `BIND_ADDR` — backend listen address (default `127.0.0.1:3001`)

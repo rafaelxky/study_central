@@ -1,0 +1,11 @@
+{
+  "name": "studyspace",
+  "private": true,
+  "workspaces": [
+    "frontend"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace frontend",
+    "lint": "npm run lint --workspace frontend"
+  }
+}
