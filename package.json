@@ -1,5 +1,5 @@
 {
-  "name": "studyspace",
+  "name": "study-central",
   "private": true,
   "workspaces": [
     "frontend"
@@ -7,6 +7,6 @@
   "scripts": {
     "build": "npm run build --workspace frontend",
     "lint": "npm run lint --workspace frontend",
-    "deploy:pages": "npx wrangler pages deploy frontend/dist --project-name=studyspace"
+    "deploy:pages": "npx wrangler pages deploy frontend/dist --project-name=study-central"
   }
 }

@@ -67,7 +67,7 @@ npm run build
 npm run deploy:pages
 ```
 
-The Pages project named `studyspace` must already exist in Cloudflare. The Rust API is not deployed by Pages and must be hosted separately, with `/api` routed to that backend.
+The Pages project named `study-central` must already exist in Cloudflare. The Rust API is not deployed by Pages and must be hosted separately, with `/api` routed to that backend.
 
 ## Backend configuration
 
