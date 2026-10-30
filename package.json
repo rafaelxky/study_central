@@ -1,13 +1,11 @@
 {
   "name": "study-central",
   "private": true,
-  "type": "module",
   "workspaces": [
     "frontend"
   ],
   "scripts": {
     "build": "npm run build --workspace frontend",
-    "lint": "npm run lint --workspace frontend",
-    "deploy:worker": "npx wrangler deploy"
+    "lint": "npm run lint --workspace frontend"
   }
 }

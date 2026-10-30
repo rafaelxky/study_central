@@ -38,36 +38,25 @@ The backend fetches a site's `/favicon.ico` when a shortcut is added and saves a
 
 ## Nginx deployment
 
-Build the frontend and make sure the backend is running on `127.0.0.1:3001`:
+Run the frontend and Rust backend on the same VPS. Nginx serves the frontend files and forwards `/api` requests to the backend on `127.0.0.1:3001`; no separate API host or `API_ORIGIN` is needed.
 
 ```sh
-npm run build --prefix frontend
+npm run build
 ./run_backend.sh
 ```
 
-The project-root [nginx.conf](./nginx.conf) serves the frontend from `/var/www/studyspace`, proxies `/api` requests to the local backend, enables client-side route fallback, and disables API caching. Copy the build output to that web root, change `server_name` to your domain (and `root` if desired), then install the server block and reload Nginx:
+The project-root [nginx.conf](./nginx.conf) serves the frontend from `/var/www/study-central`, proxies `/api` requests to the local backend, enables client-side route fallback, and disables API caching. On the VPS, change `server_name` to your domain, install the built files and server block, then reload Nginx:
 
 ```sh
-sudo mkdir -p /var/www/studyspace
-sudo cp -r frontend/dist/. /var/www/studyspace/
-sudo cp nginx.conf /etc/nginx/sites-available/studyspace
-sudo ln -s /etc/nginx/sites-available/studyspace /etc/nginx/sites-enabled/studyspace
+sudo mkdir -p /var/www/study-central
+sudo cp -r frontend/dist/. /var/www/study-central/
+sudo cp nginx.conf /etc/nginx/sites-available/study-central
+sudo ln -s /etc/nginx/sites-available/study-central /etc/nginx/sites-enabled/study-central
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-This configuration serves HTTP only. Configure TLS with your deployment's certificate before exposing the site publicly, then set `COOKIE_SECURE=true` for the backend.
-
-## Cloudflare Workers
-
-The repository root is configured as an npm workspace for Cloudflare Workers Builds. Set the build command to `npm run build` and the deploy command to `npm run deploy:worker`. The Wrangler config deploys the built frontend assets as a Worker and routes `/api` requests through `worker.js`.
-
-```sh
-npm run build
-npm run deploy:worker
-```
-
-Set the `API_ORIGIN` Worker variable to the HTTPS origin of the separately hosted Rust backend (for example, `https://api.example.com`; do not include a path). The Worker forwards `/api` requests and session cookies to that backend, so the frontend and API remain same-origin in the browser. The Wrangler deploy token needs permission to edit Workers in the correct Cloudflare account.
+Configure TLS with your certificate before exposing the VPS publicly, then set `COOKIE_SECURE=true` in the backend environment. Keep the backend bound to `127.0.0.1`; Nginx is its public-facing reverse proxy. Run the backend under a service manager such as systemd so it restarts automatically and remains up after logout.
 
 ## Backend configuration
 
