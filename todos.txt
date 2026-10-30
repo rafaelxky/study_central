@@ -1,0 +1,31 @@
+- login / create account with email confirmation
+
+X - Dashboard to add shortcuts to important websites. 
+    Backend accepts keeps and manages the URLS, fetch the icons from the websites.
+    Make it so its not a nuisance but is imediately aparent when you enter the website.
+    Urls must be tied to the user 
+
+- remove bell with notification substitute for regular bell, add drop down menu for notif. When notif received change icons
+
+- remove legends from shortcuts make it as simple as possible
+
+X - jwt token is copied from website and sent to DB
+
+X - save login data in localdata in frontend, currently refreshing logs out it should not do that
+
+X - main page is login if not loged, currently if you are not loged the main page is empty so its better to just redirect to login page if not loged. The user should not be able to access the main page without login
+
+X - jwt token input area should not be evident in the main page. It will not be accessed as ofter so it takes up space. Make it smaller. For example you could make it a sidebar thing but do as you think is the best UX 
+
+X - accept correct session token
+
+- shortcuts should fetch favicon from website
+
+X - add a notes section were I can create new notes and organize them. The server must keep them. allow me to pin a note in the main menu
+- add a todo list in main were I can add remove and check tasks
+- add a calendar were I can mark events and weekly classes are listed, it must allow for title and description of each event or class and color coding, must allow for one day events such as tests and also weekly stuff, for daily it must allow me to choose how many days before to notify me. A notification is just in the bell. When I press the bell it drops down saying what is predetermined then I can press to see more. 
+
+- allow to edit the shortcuts
+- add shortcut folders
+
+- should be able to unpin notes from dashboard
