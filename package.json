@@ -8,6 +8,8 @@
   "scripts": {
     "build": "npm run build --workspace frontend",
     "lint": "npm run lint --workspace frontend",
-    "deploy:worker": "npx wrangler deploy"
+    "d1:create": "npx wrangler d1 create study-central",
+    "d1:migrate": "npx wrangler d1 migrations apply study-central --remote",
+    "deploy:worker": "npm run d1:migrate && npx wrangler deploy"
   }
 }
