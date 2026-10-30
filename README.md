@@ -36,27 +36,17 @@ Open **Calendar** from the left navigation to add one-day events or weekly class
 
 The backend fetches a site's `/favicon.ico` when a shortcut is added and saves a small supported image with that shortcut. If an icon is unavailable, the shortcut still works with a generic icon. Favicon requests are limited to public HTTP(S) hosts and standard web ports; private or local network addresses and redirects are not fetched. Shortcut URLs belong to the account that created them.
 
+## Cloudflare Workers deployment
+
+This repository is configured for the Cloudflare Workers Builds page shown in the Cloudflare dashboard. Use `npm run build` as the build command and `npm run deploy:worker` as the deploy command. The Worker serves the built frontend and forwards `/api` requests to the Rust backend.
+
+The backend is Rust/Axum with SQLite, so it does not run inside this static-assets Worker. Host it separately at a public HTTPS origin and set the Worker variable `API_ORIGIN` to that origin (for example `https://api.example.com`, without `/api`). Set `COOKIE_SECURE=true` on the backend. The Worker proxies the browser's API requests and cookies so the frontend can use same-origin `/api` URLs.
+
+The deploy command requires a Cloudflare API token with permission to deploy Workers in the account containing the `study-central` Worker.
+
 ## Nginx deployment
 
-Run the frontend and Rust backend on the same VPS. Nginx serves the frontend files and forwards `/api` requests to the backend on `127.0.0.1:3001`; no separate API host or `API_ORIGIN` is needed.
-
-```sh
-npm run build
-./run_backend.sh
-```
-
-The project-root [nginx.conf](./nginx.conf) serves the frontend from `/var/www/study-central`, proxies `/api` requests to the local backend, enables client-side route fallback, and disables API caching. On the VPS, change `server_name` to your domain, install the built files and server block, then reload Nginx:
-
-```sh
-sudo mkdir -p /var/www/study-central
-sudo cp -r frontend/dist/. /var/www/study-central/
-sudo cp nginx.conf /etc/nginx/sites-available/study-central
-sudo ln -s /etc/nginx/sites-available/study-central /etc/nginx/sites-enabled/study-central
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
-Configure TLS with your certificate before exposing the VPS publicly, then set `COOKIE_SECURE=true` in the backend environment. Keep the backend bound to `127.0.0.1`; Nginx is its public-facing reverse proxy. Run the backend under a service manager such as systemd so it restarts automatically and remains up after logout.
+For deployments where the Rust API and frontend are hosted together on a VPS, the project-root [nginx.conf](./nginx.conf) serves the frontend from `/var/www/study-central` and proxies `/api` requests to the backend on `127.0.0.1:3001`. Build with `npm run build`, copy `frontend/dist/.` into the configured web root, and configure TLS before public use.
 
 ## Backend configuration
 
