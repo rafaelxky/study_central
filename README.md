@@ -58,16 +58,16 @@ sudo systemctl reload nginx
 
 This configuration serves HTTP only. Configure TLS with your deployment's certificate before exposing the site publicly, then set `COOKIE_SECURE=true` for the backend.
 
-## Cloudflare Pages
+## Cloudflare Workers
 
-The repository root is configured as an npm workspace so Cloudflare can install dependencies from the repository root. For a Cloudflare Pages project, set the build command to `npm run build` and the build output directory to `frontend/dist`. Do not use `npx wrangler deploy`, which deploys a Worker. For a manual CLI deployment, build first and deploy the Pages output:
+The repository root is configured as an npm workspace for Cloudflare Workers Builds. Set the build command to `npm run build` and the deploy command to `npm run deploy:worker`. The Wrangler config deploys the built frontend assets as a Worker and routes `/api` requests through `worker.js`.
 
 ```sh
 npm run build
-npm run deploy:pages
+npm run deploy:worker
 ```
 
-The Pages project named `study-central` must already exist in Cloudflare. The Rust API is not deployed by Pages and must be hosted separately, with `/api` routed to that backend.
+Set the `API_ORIGIN` Worker variable to the HTTPS origin of the separately hosted Rust backend (for example, `https://api.example.com`; do not include a path). The Worker forwards `/api` requests and session cookies to that backend, so the frontend and API remain same-origin in the browser. The Wrangler deploy token needs permission to edit Workers in the correct Cloudflare account.
 
 ## Backend configuration
 
