@@ -467,6 +467,15 @@ async function pdfsRequest(file?: File): Promise<PdfsResponse> {
   return readApiResponse<PdfsResponse>(response, file ? 'Could not upload the PDF.' : 'Could not load PDFs.')
 }
 
+async function deletePdfRequest(id: string): Promise<void> {
+  const response = await fetch(`/api/pdfs/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    credentials: 'same-origin',
+  })
+  if (response.status === 204) return
+  await readApiResponse<{ error?: string }>(response, 'Could not delete the PDF.')
+}
+
 function formatFileSize(size: number): string {
   return size < 1024 * 1024
     ? `${Math.max(1, Math.round(size / 1024))} KB`
@@ -978,6 +987,19 @@ function App() {
         setPdfFileName('')
       }
       setPdfUploadBusy(false)
+    }
+  }
+
+  async function deletePdf(pdf: PdfMetadata) {
+    if (!window.confirm(`Delete "${pdf.filename}"? This will permanently remove it from your account.`)) return
+    setPdfError('')
+    try {
+      await deletePdfRequest(pdf.id)
+      const remainingPdfs = pdfs.filter((item) => item.id !== pdf.id)
+      setPdfs(remainingPdfs)
+      if (selectedPdfId === pdf.id) setSelectedPdfId(remainingPdfs[0]?.id ?? null)
+    } catch (requestError) {
+      setPdfError(requestError instanceof Error ? requestError.message : 'Could not delete the PDF.')
     }
   }
 
@@ -1759,6 +1781,14 @@ function App() {
                       >
                         Download
                       </a>
+                      <button
+                        aria-label={`Delete ${pdf.filename}`}
+                        className="pdf-delete-button"
+                        onClick={() => void deletePdf(pdf)}
+                        type="button"
+                      >
+                        Delete
+                      </button>
                     </article>
                   ))}
                 </div>

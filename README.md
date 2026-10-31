@@ -34,7 +34,7 @@ The dashboard to-do list lets you add tasks, mark them complete or incomplete, a
 
 Open **Calendar** from the left navigation to add one-day events or weekly classes with inclusive start and end dates, descriptions, times, and color labels. Set a reminder from 1 to 30 days ahead (or leave it at no reminder); reminders appear under the bell and on the Notifications page. Calendar items are stored in the backend database per account.
 
-Open **PDFs** from the left navigation to upload, preview, fullscreen, and download PDFs. Uploads require a signed-in account, are stored in the server database per account, and are limited to 5 MB per file.
+Open **PDFs** from the left navigation to upload, preview, fullscreen, download, and delete PDFs. Uploads require a signed-in account, are stored in the server database per account, and are limited to 5 MB per file.
 
 The local Rust backend fetches a site's `/favicon.ico` when a shortcut is added and saves a small supported image with that shortcut. If an icon is unavailable, the shortcut still works with a generic icon. Favicon requests are limited to public HTTP(S) hosts and standard web ports; private or local network addresses and redirects are not fetched. Shortcut URLs belong to the account that created them.
 

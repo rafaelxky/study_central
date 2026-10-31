@@ -1567,6 +1567,7 @@
 }
 
 .pdf-download-button,
+.pdf-delete-button,
 .pdf-viewer-action {
   background: #25232f;
   border: 1px solid #393644;
@@ -1584,6 +1585,21 @@
 .pdf-viewer-action:hover {
   background: #302d3b;
   color: #eee8ff;
+}
+
+.pdf-delete-button {
+  background: transparent;
+  color: #d997a0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.pdf-delete-button:hover {
+  background: #3a2028;
+  border-color: #693340;
+  color: #f0c2c8;
 }
 
 .pdf-viewer {

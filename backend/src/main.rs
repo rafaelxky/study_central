@@ -487,6 +487,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .post(upload_pdf)
                 .route_layer(DefaultBodyLimit::max(MAX_PDF_BYTES)),
         )
+        .route("/api/pdfs/{id}", axum::routing::delete(delete_pdf))
         .route("/api/pdfs/{id}/file", get(get_pdf_file))
         .with_state(state);
 
@@ -1671,6 +1672,24 @@ async fn get_pdf_file(
         HeaderValue::from_static("nosniff"),
     );
     Ok(response)
+}
+
+async fn delete_pdf(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let user_id = authenticated_user_id(&state, &headers).await?;
+    let result = sqlx::query("DELETE FROM pdfs WHERE id = ? AND user_id = ?")
+        .bind(id)
+        .bind(user_id)
+        .execute(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+    if result.rows_affected() == 0 {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "PDF not found."));
+    }
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 fn decode_pdf_filename(value: &str) -> Option<String> {

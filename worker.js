@@ -862,6 +862,8 @@ async function routeApi(request, env) {
     } else if (parts.length === 2 && parts[1] === "pdfs") {
       if (method === "GET") response = await listPdfs(request, db);
       if (method === "POST") response = await uploadPdf(request, db);
+    } else if (parts.length === 3 && parts[1] === "pdfs" && method === "DELETE") {
+      response = await deleteOwned(request, db, "pdfs", parts[2], "PDF");
     } else if (parts.length === 4 && parts[1] === "pdfs" && parts[3] === "file" && method === "GET") {
       response = await getPdfFile(request, db, parts[2]);
     } else if (parts.length === 2 && parts[1] === "shortcuts") {
