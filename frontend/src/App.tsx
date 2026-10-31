@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import './App.css'
 
 type IconName =
@@ -17,8 +17,9 @@ type IconName =
   | 'calendar'
   | 'clock'
   | 'edit'
+  | 'pdf'
 type AuthMode = 'login' | 'register'
-type WorkspacePage = 'dashboard' | 'notes' | 'calendar' | 'notifications'
+type WorkspacePage = 'dashboard' | 'notes' | 'calendar' | 'pdfs' | 'notifications'
 
 type User = {
   id: string
@@ -55,6 +56,19 @@ type Note = {
 type NotesResponse = {
   notes?: Note[]
   note?: Note
+  error?: string
+}
+
+type PdfMetadata = {
+  id: string
+  filename: string
+  size_bytes: number
+  uploaded_at: number
+}
+
+type PdfsResponse = {
+  pdfs?: PdfMetadata[]
+  pdf?: PdfMetadata
   error?: string
 }
 
@@ -194,6 +208,7 @@ function getCalendarReminders(events: CalendarEvent[], today = localDateString(n
 function workspacePageFromPath(pathname: string): WorkspacePage {
   if (pathname === '/notes') return 'notes'
   if (pathname === '/calendar') return 'calendar'
+  if (pathname === '/pdfs') return 'pdfs'
   if (pathname === '/notifications') return 'notifications'
   return 'dashboard'
 }
@@ -306,6 +321,7 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
     calendar: <><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M16 3v4M8 3v4M3 11h18" /></>,
     clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
     edit: <><path d="m15 5 4 4M4 20l4-.8L19 8a2.1 2.1 0 0 0-3-3L5 16z" /></>,
+    pdf: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 13h8m-8 4h5" /></>,
   }
 
   return (
@@ -413,6 +429,25 @@ async function universityTokenRequest(
   return readApiResponse<UniversityTokenStatus>(response, 'Could not manage the university token.')
 }
 
+async function pdfsRequest(file?: File): Promise<PdfsResponse> {
+  const response = await fetch('/api/pdfs', {
+    method: file ? 'POST' : 'GET',
+    headers: file ? {
+      'Content-Type': 'application/pdf',
+      'X-File-Name': encodeURIComponent(file.name),
+    } : undefined,
+    credentials: 'same-origin',
+    body: file,
+  })
+  return readApiResponse<PdfsResponse>(response, file ? 'Could not upload the PDF.' : 'Could not load PDFs.')
+}
+
+function formatFileSize(size: number): string {
+  return size < 1024 * 1024
+    ? `${Math.max(1, Math.round(size / 1024))} KB`
+    : `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
 function App() {
   const [user, setUser] = useState<User | null>(() => readCachedUser())
   const [activePage, setActivePage] = useState<WorkspacePage>(() => workspacePageFromPath(window.location.pathname))
@@ -427,6 +462,17 @@ function App() {
   const [notes, setNotes] = useState<Note[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([])
+  const [pdfs, setPdfs] = useState<PdfMetadata[]>([])
+  const [pdfsLoading, setPdfsLoading] = useState(() => window.location.pathname === '/pdfs')
+  const [pdfError, setPdfError] = useState('')
+  const [pdfUploadBusy, setPdfUploadBusy] = useState(false)
+  const [pdfDragActive, setPdfDragActive] = useState(false)
+  const [pdfFileName, setPdfFileName] = useState('')
+  const [selectedPdfId, setSelectedPdfId] = useState<string | null>(null)
+  const [pdfFullscreen, setPdfFullscreen] = useState(false)
+  const pdfViewerRef = useRef<HTMLDivElement>(null)
+  const pdfInputRef = useRef<HTMLInputElement>(null)
+  const pdfDragDepthRef = useRef(0)
   const [shortcutsLoading, setShortcutsLoading] = useState(() => user !== null)
   const [notesLoading, setNotesLoading] = useState(() => user !== null)
   const [tasksLoading, setTasksLoading] = useState(() => user !== null)
@@ -476,7 +522,12 @@ function App() {
   useEffect(() => {
     let active = true
     const handlePopState = () => {
-      setActivePage(workspacePageFromPath(window.location.pathname))
+      const page = workspacePageFromPath(window.location.pathname)
+      setActivePage(page)
+      if (page === 'pdfs') {
+        setPdfsLoading(true)
+        setPdfError('')
+      }
     }
     window.addEventListener('popstate', handlePopState)
 
@@ -487,7 +538,7 @@ function App() {
         setUser(currentUser ?? null)
         cacheUser(currentUser ?? null)
         const destination = currentUser
-          ? ['/', '/notes', '/calendar', '/notifications'].includes(window.location.pathname)
+          ? ['/', '/notes', '/calendar', '/pdfs', '/notifications'].includes(window.location.pathname)
             ? window.location.pathname
             : '/'
           : '/login'
@@ -581,6 +632,31 @@ function App() {
     }
   }, [])
 
+  useEffect(() => {
+    if (!user || activePage !== 'pdfs') return
+    let active = true
+    void pdfsRequest()
+      .then((result) => {
+        if (!active) return
+        const nextPdfs = result.pdfs ?? []
+        setPdfs(nextPdfs)
+        setSelectedPdfId((selectedId) =>
+          nextPdfs.some((pdf) => pdf.id === selectedId) ? selectedId : nextPdfs[0]?.id ?? null,
+        )
+      })
+      .catch((requestError: unknown) => {
+        if (active) {
+          setPdfError(requestError instanceof Error ? requestError.message : 'Could not load PDFs.')
+        }
+      })
+      .finally(() => {
+        if (active) setPdfsLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [activePage, user])
+
   async function submitAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError('')
@@ -669,6 +745,9 @@ function App() {
       setNotes([])
       setTasks([])
       setCalendarEvents([])
+      setPdfs([])
+      setSelectedPdfId(null)
+      setPdfError('')
       setTaskDraft('')
       setSearch('')
       setUniversityTokenStatus({ enabled: false, saved: false, updated_at: null })
@@ -827,13 +906,85 @@ function App() {
   function navigateTo(page: WorkspacePage) {
     const path = page === 'dashboard'
       ? '/'
-      : page === 'notes' ? '/notes' : page === 'calendar' ? '/calendar' : '/notifications'
+      : page === 'notes' ? '/notes'
+        : page === 'calendar' ? '/calendar'
+          : page === 'pdfs' ? '/pdfs' : '/notifications'
     if (window.location.pathname !== path) {
       window.history.pushState(null, '', path)
+    }
+    if (page === 'pdfs' && activePage !== 'pdfs') {
+      setPdfsLoading(true)
+      setPdfError('')
     }
     setActivePage(page)
     setNotificationDropdownOpen(false)
   }
+
+  async function uploadPdfFiles(files: File[]) {
+    if (files.length === 0) {
+      setPdfError('Choose or drop a PDF file to upload.')
+      return
+    }
+    if (files.some((file) => !file.name.toLowerCase().endsWith('.pdf'))) {
+      setPdfError('Only PDF files can be uploaded.')
+      return
+    }
+    if (files.some((file) => file.size > 5_000_000)) {
+      setPdfError('PDFs cannot be larger than 5 MB.')
+      return
+    }
+    setPdfError('')
+    setPdfUploadBusy(true)
+    const uploadedPdfs: PdfMetadata[] = []
+    try {
+      for (const file of files) {
+        const result = await pdfsRequest(file)
+        const uploadedPdf = result.pdf
+        if (!uploadedPdf) throw new Error('The server did not return the uploaded PDF.')
+        uploadedPdfs.push(uploadedPdf)
+      }
+    } catch (requestError) {
+      setPdfError(requestError instanceof Error ? requestError.message : 'Could not upload the PDF.')
+    } finally {
+      if (uploadedPdfs.length > 0) {
+        setPdfs((current) => [...uploadedPdfs.slice().reverse(), ...current])
+        setSelectedPdfId(uploadedPdfs[uploadedPdfs.length - 1].id)
+        if (pdfInputRef.current) pdfInputRef.current.value = ''
+        setPdfFileName('')
+      }
+      setPdfUploadBusy(false)
+    }
+  }
+
+  function handlePdfDrop(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault()
+    pdfDragDepthRef.current = 0
+    setPdfDragActive(false)
+    if (pdfUploadBusy) return
+    const droppedPdfs = Array.from(event.dataTransfer.files)
+    void uploadPdfFiles(droppedPdfs)
+  }
+
+  async function togglePdfFullscreen() {
+    const viewer = pdfViewerRef.current
+    if (!viewer) return
+    try {
+      if (document.fullscreenElement === viewer) {
+        await document.exitFullscreen()
+      } else {
+        await viewer.requestFullscreen()
+      }
+      setPdfFullscreen(document.fullscreenElement === viewer)
+    } catch (requestError) {
+      setPdfError(requestError instanceof Error ? requestError.message : 'Could not open the PDF fullscreen.')
+    }
+  }
+
+  useEffect(() => {
+    const syncFullscreen = () => setPdfFullscreen(document.fullscreenElement === pdfViewerRef.current)
+    document.addEventListener('fullscreenchange', syncFullscreen)
+    return () => document.removeEventListener('fullscreenchange', syncFullscreen)
+  }, [])
 
   function openCalendarEditor(event?: CalendarEvent, date = selectedCalendarDate) {
     setEditingCalendarEventId(event?.id ?? null)
@@ -938,6 +1089,7 @@ function App() {
   const calendarReminders = getCalendarReminders(calendarEvents, calendarToday)
   const calendarDates = getCalendarMonthDates(calendarMonth)
   const selectedDateEvents = calendarEvents.filter((event) => eventOccursOnDate(event, selectedCalendarDate))
+  const selectedPdf = pdfs.find((pdf) => pdf.id === selectedPdfId) ?? null
   if (!authChecked) {
     return (
       <main className="auth-page" role="status">
@@ -1049,6 +1201,15 @@ function App() {
             <Icon name="calendar" size={17} />
             <span>Calendar</span>
           </button>
+          <button
+            aria-current={activePage === 'pdfs' ? 'page' : undefined}
+            className={`sidebar-nav-item ${activePage === 'pdfs' ? 'sidebar-nav-item-active' : ''}`}
+            onClick={() => navigateTo('pdfs')}
+            type="button"
+          >
+            <Icon name="pdf" size={17} />
+            <span>PDFs</span>
+          </button>
         </nav>
       </aside>
       <main className="main-content">
@@ -1058,6 +1219,7 @@ function App() {
             <strong>
               {activePage === 'notes' ? 'Notes'
                 : activePage === 'calendar' ? 'Calendar'
+                  : activePage === 'pdfs' ? 'PDFs'
                   : activePage === 'notifications' ? 'Notifications' : 'Overview'}
             </strong>
           </div>
@@ -1483,6 +1645,122 @@ function App() {
                   )}
                 </section>
               </>
+            )}
+          </section>
+        ) : activePage === 'pdfs' ? (
+          <section
+            className={`dashboard pdfs-page ${pdfDragActive ? 'pdfs-page-drag-active' : ''}`}
+            onDragEnter={(event) => {
+              event.preventDefault()
+              if (pdfUploadBusy || !Array.from(event.dataTransfer.types).includes('Files')) return
+              pdfDragDepthRef.current += 1
+              setPdfDragActive(true)
+            }}
+            onDragLeave={(event) => {
+              event.preventDefault()
+              pdfDragDepthRef.current = Math.max(0, pdfDragDepthRef.current - 1)
+              if (pdfDragDepthRef.current === 0) setPdfDragActive(false)
+            }}
+            onDragOver={(event) => {
+              event.preventDefault()
+              if (event.dataTransfer.types.includes('Files')) event.dataTransfer.dropEffect = 'copy'
+            }}
+            onDrop={handlePdfDrop}
+          >
+            {pdfDragActive && <div aria-hidden="true" className="pdf-drop-overlay">Drop PDF files to upload</div>}
+            <div className="dashboard-heading">
+              <div>
+                <p className="dashboard-eyebrow">YOUR STUDYSPACE</p>
+                <h1>PDFs</h1>
+                <p className="dashboard-description">Upload and read your PDFs. Files are saved to your account.</p>
+              </div>
+              <form
+                className="pdf-upload-form"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  const file = pdfInputRef.current?.files?.[0]
+                  if (file) void uploadPdfFiles([file])
+                  else setPdfError('Choose or drop a PDF file to upload.')
+                }}
+              >
+                <label className="pdf-file-label">
+                  <span>{pdfUploadBusy ? 'Uploading…' : pdfFileName || 'Choose a PDF'}</span>
+                  <input
+                    accept="application/pdf,.pdf"
+                    aria-label="Choose a PDF to upload"
+                    disabled={pdfUploadBusy}
+                    onChange={(event) => setPdfFileName(event.target.files?.[0]?.name ?? '')}
+                    ref={pdfInputRef}
+                    type="file"
+                  />
+                </label>
+                <button className="add-shortcut-button" disabled={pdfUploadBusy} type="submit">
+                  <Icon name="plus" size={17} /> Upload PDF
+                </button>
+              </form>
+            </div>
+            <p className="pdf-upload-help">Drop PDF files here or choose files to upload. Maximum 5 MB each.</p>
+            {pdfError && <p className="global-error" role="alert">{pdfError}</p>}
+            {pdfsLoading ? (
+              <div className="shortcuts-message">Loading your PDFs…</div>
+            ) : pdfs.length === 0 ? (
+              <div className="empty-shortcuts">
+                <span className="empty-shortcuts-icon"><Icon name="pdf" size={22} /></span>
+                <h2>No PDFs yet</h2>
+                <p>Upload a PDF to keep it available in your Studyspace.</p>
+              </div>
+            ) : (
+              <div className="pdf-library">
+                <div className="pdf-list" aria-label="Your PDFs">
+                  {pdfs.map((pdf) => (
+                    <article className={`pdf-card ${selectedPdfId === pdf.id ? 'pdf-card-active' : ''}`} key={pdf.id}>
+                      <button
+                        aria-current={selectedPdfId === pdf.id ? 'true' : undefined}
+                        className="pdf-card-open"
+                        onClick={() => setSelectedPdfId(pdf.id)}
+                        type="button"
+                      >
+                        <Icon name="pdf" size={19} />
+                        <span className="pdf-card-copy">
+                          <strong>{pdf.filename}</strong>
+                          <span>{formatFileSize(pdf.size_bytes)} · {new Date(pdf.uploaded_at * 1000).toLocaleDateString()}</span>
+                        </span>
+                      </button>
+                      <a
+                        aria-label={`Download ${pdf.filename}`}
+                        className="pdf-download-button"
+                        href={`/api/pdfs/${encodeURIComponent(pdf.id)}/file?download=1`}
+                        title={`Download ${pdf.filename}`}
+                      >
+                        Download
+                      </a>
+                    </article>
+                  ))}
+                </div>
+                {selectedPdf && (
+                  <section aria-label={`PDF viewer: ${selectedPdf.filename}`} className="pdf-viewer" ref={pdfViewerRef}>
+                    <div className="pdf-viewer-toolbar">
+                      <h2 title={selectedPdf.filename}>{selectedPdf.filename}</h2>
+                      <div>
+                        <button className="pdf-viewer-action" onClick={() => void togglePdfFullscreen()} type="button">
+                          {pdfFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                        </button>
+                        <a
+                          className="pdf-viewer-action"
+                          href={`/api/pdfs/${encodeURIComponent(selectedPdf.id)}/file?download=1`}
+                        >
+                          Download
+                        </a>
+                      </div>
+                    </div>
+                    <iframe
+                      className="pdf-viewer-frame"
+                      src={`/api/pdfs/${encodeURIComponent(selectedPdf.id)}/file`}
+                      title={selectedPdf.filename}
+                    />
+                  </section>
+                )}
+              </div>
             )}
           </section>
         ) : (

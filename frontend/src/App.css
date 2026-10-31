@@ -1422,6 +1422,226 @@
   padding: 8px 0;
 }
 
+.pdf-upload-form {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.pdfs-page {
+  position: relative;
+}
+
+.pdfs-page-drag-active::after {
+  border: 2px dashed #bda7f5;
+  border-radius: 12px;
+  content: "";
+  inset: 14px;
+  pointer-events: none;
+  position: absolute;
+  z-index: 9;
+}
+
+.pdf-drop-overlay {
+  align-items: center;
+  background: #14151be8;
+  border: 1px solid #51466e;
+  border-radius: 10px;
+  color: #ded3ff;
+  display: flex;
+  font-size: 15px;
+  font-weight: 600;
+  inset: 14px;
+  justify-content: center;
+  pointer-events: none;
+  position: absolute;
+  z-index: 10;
+}
+
+.pdf-file-label {
+  align-items: center;
+  background: #25232f;
+  border: 1px solid #393644;
+  border-radius: 7px;
+  color: #d1c9e8;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 11px;
+  min-height: 36px;
+  max-width: min(260px, 42vw);
+  overflow: hidden;
+  padding: 0 12px;
+  position: relative;
+}
+
+.pdf-file-label > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-file-label:focus-within {
+  outline: 2px solid #b5a0ff;
+  outline-offset: 3px;
+}
+
+.pdf-file-label input {
+  cursor: pointer;
+  inset: 0;
+  opacity: 0;
+  position: absolute;
+  width: 100%;
+}
+
+.pdf-file-label:has(input:disabled) {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.pdf-upload-help {
+  color: #777987;
+  font-size: 10px;
+  margin: -20px 0 22px;
+  text-align: right;
+}
+
+.pdf-library {
+  align-items: start;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(230px, 0.32fr) minmax(0, 1fr);
+}
+
+.pdf-list {
+  display: grid;
+  gap: 8px;
+}
+
+.pdf-card {
+  align-items: center;
+  background: #1b1b24;
+  border: 1px solid #2e2d38;
+  border-radius: 9px;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px;
+}
+
+.pdf-card-active {
+  background: #24212f;
+  border-color: #51466e;
+}
+
+.pdf-card-open {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: #bda9f4;
+  cursor: pointer;
+  display: flex;
+  flex: 1;
+  gap: 9px;
+  min-width: 0;
+  padding: 2px;
+  text-align: left;
+}
+
+.pdf-card-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.pdf-card-copy strong {
+  color: #e4e1eb;
+  font-size: 11px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+
+.pdf-card-copy span {
+  color: #858794;
+  font-size: 9px;
+}
+
+.pdf-download-button,
+.pdf-viewer-action {
+  background: #25232f;
+  border: 1px solid #393644;
+  border-radius: 6px;
+  color: #d1c9e8;
+  cursor: pointer;
+  font: inherit;
+  font-size: 9px;
+  padding: 7px 8px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.pdf-download-button:hover,
+.pdf-viewer-action:hover {
+  background: #302d3b;
+  color: #eee8ff;
+}
+
+.pdf-viewer {
+  background: #101117;
+  border: 1px solid #2e2d38;
+  border-radius: 9px;
+  display: flex;
+  flex-direction: column;
+  height: min(78vh, 900px);
+  min-height: 380px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.pdf-viewer:fullscreen {
+  background: #101117;
+  border: 0;
+  border-radius: 0;
+  height: 100vh;
+  width: 100vw;
+}
+
+.pdf-viewer-toolbar {
+  align-items: center;
+  background: #1b1b24;
+  border-bottom: 1px solid #2e2d38;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-height: 48px;
+  padding: 7px 10px 7px 14px;
+}
+
+.pdf-viewer-toolbar h2 {
+  color: #dedbe7;
+  font-size: 11px;
+  font-weight: 550;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-viewer-toolbar > div {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 7px;
+}
+
+.pdf-viewer-frame {
+  background: #26262b;
+  border: 0;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
 .notes-grid {
   display: grid;
   gap: 14px;
@@ -1997,6 +2217,24 @@
 
   .empty-shortcuts {
     margin-top: 26px;
+  }
+
+  .pdf-upload-form {
+    width: 100%;
+  }
+
+  .pdf-upload-help {
+    margin: -14px 0 20px;
+    text-align: left;
+  }
+
+  .pdf-library {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pdf-viewer {
+    height: 68vh;
+    min-height: 320px;
   }
 }
 

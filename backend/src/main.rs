@@ -17,7 +17,11 @@ use argon2::{
 };
 use axum::{
     Json, Router,
-    extract::{Path, State, rejection::JsonRejection},
+    body::{Body, Bytes},
+    extract::{
+        DefaultBodyLimit, Path, Query, State,
+        rejection::{BytesRejection, JsonRejection},
+    },
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -38,6 +42,7 @@ const SESSION_SECONDS: i64 = 60 * 60 * 24 * 7;
 const MAX_FAVICON_BYTES: usize = 64 * 1024;
 const MAX_WEBSITE_HTML_BYTES: usize = 512 * 1024;
 const MAX_UNIVERSITY_TOKEN_BYTES: usize = 16 * 1024;
+const MAX_PDF_BYTES: usize = 5_000_000;
 
 #[derive(Clone)]
 struct AppState {
@@ -46,6 +51,29 @@ struct AppState {
     secure_cookie: bool,
     http_client: Client,
     jwt_cipher: Option<Arc<Aes256Gcm>>,
+}
+
+#[derive(Serialize)]
+struct PdfMetadata {
+    id: String,
+    filename: String,
+    size_bytes: i64,
+    uploaded_at: i64,
+}
+
+#[derive(Serialize)]
+struct PdfsResponse {
+    pdfs: Vec<PdfMetadata>,
+}
+
+#[derive(Serialize)]
+struct PdfResponse {
+    pdf: PdfMetadata,
+}
+
+#[derive(Deserialize)]
+struct PdfFileQuery {
+    download: Option<String>,
 }
 
 #[derive(Debug)]
@@ -294,6 +322,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .execute(&pool)
     .await?;
     sqlx::query(
+        "CREATE TABLE IF NOT EXISTS pdfs (
+            id TEXT PRIMARY KEY NOT NULL,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            filename TEXT NOT NULL,
+            content BLOB NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            uploaded_at INTEGER NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS pdfs_user_uploaded_at ON pdfs(user_id, uploaded_at DESC)",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
         "CREATE TABLE IF NOT EXISTS tasks (
             id TEXT PRIMARY KEY NOT NULL,
             user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -436,6 +481,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .put(save_university_token)
                 .delete(delete_university_token),
         )
+        .route(
+            "/api/pdfs",
+            get(list_pdfs)
+                .post(upload_pdf)
+                .route_layer(DefaultBodyLimit::max(MAX_PDF_BYTES)),
+        )
+        .route("/api/pdfs/{id}/file", get(get_pdf_file))
         .with_state(state);
 
     let address = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3001".into());
@@ -1457,6 +1509,219 @@ async fn authenticated_user_id(state: &AppState, headers: &HeaderMap) -> Result<
         .ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "Log in to manage your workspace."))
 }
 
+async fn list_pdfs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let user_id = authenticated_user_id(&state, &headers).await?;
+    let rows = sqlx::query_as::<_, (String, String, i64, i64)>(
+        "SELECT id, filename, size_bytes, uploaded_at
+         FROM pdfs WHERE user_id = ? ORDER BY uploaded_at DESC, id",
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(ApiError::internal)?;
+    let pdfs = rows
+        .into_iter()
+        .map(|(id, filename, size_bytes, uploaded_at)| PdfMetadata {
+            id,
+            filename,
+            size_bytes,
+            uploaded_at,
+        })
+        .collect();
+    let mut response = Json(PdfsResponse { pdfs }).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn upload_pdf(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Response, ApiError> {
+    let user_id = authenticated_user_id(&state, &headers).await?;
+    let body = body.map_err(|rejection| {
+        if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            ApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "PDFs cannot be larger than 5 MB.",
+            )
+        } else {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "The uploaded PDF could not be read.",
+            )
+        }
+    })?;
+    let filename = headers
+        .get("x-file-name")
+        .and_then(|value| value.to_str().ok())
+        .and_then(decode_pdf_filename)
+        .ok_or_else(|| ApiError::new(StatusCode::BAD_REQUEST, "Choose a valid PDF filename."))?;
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if !content_type
+        .split(';')
+        .next()
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/pdf"))
+    {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Upload must be a PDF file.",
+        ));
+    }
+    if body.is_empty() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Upload must contain a PDF file.",
+        ));
+    }
+    if body.len() > MAX_PDF_BYTES {
+        return Err(ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "PDFs cannot be larger than 5 MB.",
+        ));
+    }
+    if !body.starts_with(b"%PDF-") {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "The uploaded file is not a valid PDF.",
+        ));
+    }
+    let id = random_token();
+    let uploaded_at = now()?;
+    let size_bytes = i64::try_from(body.len()).map_err(ApiError::internal)?;
+    sqlx::query(
+        "INSERT INTO pdfs (id, user_id, filename, content, size_bytes, uploaded_at)
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(user_id)
+    .bind(&filename)
+    .bind(body.as_ref())
+    .bind(size_bytes)
+    .bind(uploaded_at)
+    .execute(&state.pool)
+    .await
+    .map_err(ApiError::internal)?;
+    let mut response = (
+        StatusCode::CREATED,
+        Json(PdfResponse {
+            pdf: PdfMetadata {
+                id,
+                filename,
+                size_bytes,
+                uploaded_at,
+            },
+        }),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn get_pdf_file(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(query): Query<PdfFileQuery>,
+) -> Result<Response, ApiError> {
+    let user_id = authenticated_user_id(&state, &headers).await?;
+    let row = sqlx::query_as::<_, (String, Vec<u8>)>(
+        "SELECT filename, content FROM pdfs WHERE id = ? AND user_id = ?",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(ApiError::internal)?
+    .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "PDF not found."))?;
+    let (filename, content) = row;
+    let disposition = if matches!(query.download.as_deref(), Some("1" | "true")) {
+        "attachment"
+    } else {
+        "inline"
+    };
+    let encoded_filename = encode_pdf_filename(&filename);
+    let content_disposition =
+        format!("{disposition}; filename=\"document.pdf\"; filename*=UTF-8''{encoded_filename}");
+    let mut response = Response::new(Body::from(content));
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/pdf"),
+    );
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&content_disposition).map_err(ApiError::internal)?,
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    Ok(response)
+}
+
+fn decode_pdf_filename(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let high = *bytes.get(index + 1)?;
+            let low = *bytes.get(index + 2)?;
+            decoded.push((hex_digit(high)? << 4) | hex_digit(low)?);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    let filename = String::from_utf8(decoded).ok()?;
+    let character_count = filename.chars().count();
+    (character_count > 0
+        && character_count <= 128
+        && filename.len() <= 255
+        && filename.to_ascii_lowercase().ends_with(".pdf")
+        && !filename
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '/' | '\\')))
+    .then_some(filename)
+}
+
+fn hex_digit(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn encode_pdf_filename(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
+                (byte as char).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
+
 async fn university_token_status(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1992,10 +2257,10 @@ fn clear_session_cookie(response: &mut Response, secure: bool) -> Result<(), Api
 #[cfg(test)]
 mod tests {
     use super::{
-        SaveCalendarEventRequest, encrypt_university_token, is_public_ip, normalize_email,
-        normalize_shortcut_url, parse_encryption_key, valid_calendar_date, validate_calendar_event,
-        validate_note_fields, validate_password, validate_task_text, validate_university_token,
-        validate_username,
+        SaveCalendarEventRequest, decode_pdf_filename, encode_pdf_filename,
+        encrypt_university_token, is_public_ip, normalize_email, normalize_shortcut_url,
+        parse_encryption_key, valid_calendar_date, validate_calendar_event, validate_note_fields,
+        validate_password, validate_task_text, validate_university_token, validate_username,
     };
     use aes_gcm::{
         Aes256Gcm, Nonce,
@@ -2041,6 +2306,22 @@ mod tests {
         assert!(validate_task_text(" ").is_err());
         assert!(validate_task_text(&"t".repeat(301)).is_err());
         assert!(validate_task_text("task\nwith newline").is_err());
+    }
+
+    #[test]
+    fn pdf_filenames_are_decoded_and_restricted() {
+        assert_eq!(
+            decode_pdf_filename("Lecture%20Notes%20%E2%9C%93.pdf").as_deref(),
+            Some("Lecture Notes ✓.pdf")
+        );
+        assert_eq!(
+            decode_pdf_filename(&encode_pdf_filename("Study notes.pdf")).as_deref(),
+            Some("Study notes.pdf")
+        );
+        assert!(decode_pdf_filename("../private.pdf").is_none());
+        assert!(decode_pdf_filename("script.txt").is_none());
+        assert!(decode_pdf_filename("bad%2Fname.pdf").is_none());
+        assert!(decode_pdf_filename("bad%0Aname.pdf").is_none());
     }
 
     fn calendar_event_request() -> SaveCalendarEventRequest {

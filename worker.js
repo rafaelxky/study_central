@@ -1,5 +1,6 @@
 const SESSION_SECONDS = 60 * 60 * 24 * 7;
 const MAX_BODY_BYTES = 256 * 1024;
+const MAX_PDF_BYTES = 5_000_000;
 const MAX_UNIVERSITY_TOKEN_BYTES = 16 * 1024;
 const PASSWORD_ITERATIONS = 50_000;
 const CALENDAR_COLORS = new Set([
@@ -410,6 +411,110 @@ function validateNote(body) {
   return { title, content, pinned: body.pinned };
 }
 
+function pdfFilename(request) {
+  const encoded = request.headers.get("x-file-name");
+  if (!encoded) fail(400, "Choose a valid PDF filename.");
+  let filename;
+  try {
+    filename = decodeURIComponent(encoded);
+  } catch {
+    fail(400, "Choose a valid PDF filename.");
+  }
+  const length = Array.from(filename).length;
+  if (
+    length < 1
+    || length > 128
+    || new TextEncoder().encode(filename).length > 255
+    || !filename.toLowerCase().endsWith(".pdf")
+    || /[\p{Cc}/\\]/u.test(filename)
+  ) {
+    fail(400, "Choose a valid PDF filename.");
+  }
+  return filename;
+}
+
+async function readPdfBody(request) {
+  const contentType = request.headers.get("content-type") ?? "";
+  if (contentType.split(";")[0].trim().toLowerCase() !== "application/pdf") {
+    fail(400, "Upload must be a PDF file.");
+  }
+  if (!request.body) fail(400, "Upload must contain a PDF file.");
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_PDF_BYTES) {
+      await reader.cancel();
+      fail(413, "PDFs cannot be larger than 5 MB.");
+    }
+    chunks.push(value);
+  }
+  if (total === 0) fail(400, "Upload must contain a PDF file.");
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  if (new TextDecoder().decode(bytes.subarray(0, 5)) !== "%PDF-") {
+    fail(400, "The uploaded file is not a valid PDF.");
+  }
+  return bytes;
+}
+
+async function listPdfs(request, db) {
+  const user = await requireUser(request, db);
+  const result = await db.prepare(
+    `SELECT id, filename, size_bytes, uploaded_at
+     FROM pdfs WHERE user_id = ? ORDER BY uploaded_at DESC, id`,
+  ).bind(user.id).all();
+  return jsonResponse({ pdfs: result.results });
+}
+
+async function uploadPdf(request, db) {
+  const user = await requireUser(request, db);
+  const filename = pdfFilename(request);
+  const content = await readPdfBody(request);
+  const id = randomToken();
+  const uploadedAt = timestamp();
+  await db.prepare(
+    `INSERT INTO pdfs (id, user_id, filename, content, size_bytes, uploaded_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).bind(id, user.id, filename, content, content.byteLength, uploadedAt).run();
+  return jsonResponse({
+    pdf: { id, filename, size_bytes: content.byteLength, uploaded_at: uploadedAt },
+  }, 201);
+}
+
+function encodePdfFilename(filename) {
+  return encodeURIComponent(filename).replace(/[!'()*]/g, (character) =>
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+async function getPdfFile(request, db, id) {
+  const user = await requireUser(request, db);
+  const row = await db.prepare(
+    "SELECT filename, content FROM pdfs WHERE id = ? AND user_id = ?",
+  ).bind(id, user.id).first();
+  if (!row) fail(404, "PDF not found.");
+  const disposition = new URL(request.url).searchParams.get("download") === "1"
+    ? "attachment"
+    : "inline";
+  const filename = encodePdfFilename(row.filename);
+  return new Response(row.content, {
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Disposition": `${disposition}; filename="document.pdf"; filename*=UTF-8''${filename}`,
+      "Content-Type": "application/pdf",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}
+
 async function listNotes(request, db) {
   const user = await requireUser(request, db);
   const result = await db.prepare(
@@ -728,6 +833,11 @@ async function routeApi(request, env) {
 
     if (parts[1] === "auth") {
       response = await handleAuth(request, db, parts);
+    } else if (parts.length === 2 && parts[1] === "pdfs") {
+      if (method === "GET") response = await listPdfs(request, db);
+      if (method === "POST") response = await uploadPdf(request, db);
+    } else if (parts.length === 4 && parts[1] === "pdfs" && parts[3] === "file" && method === "GET") {
+      response = await getPdfFile(request, db, parts[2]);
     } else if (parts.length === 2 && parts[1] === "shortcuts") {
       if (method === "GET") response = await listShortcuts(request, db);
       if (method === "POST") response = await createShortcut(request, db);

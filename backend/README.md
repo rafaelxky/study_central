@@ -1,6 +1,6 @@
 # Studyspace backend
 
-Rust HTTP API for Studyspace accounts, per-user website shortcuts, and encrypted university-token storage. Built with Axum and SQLite.
+Rust HTTP API for Studyspace accounts, per-user website shortcuts and PDFs, and encrypted university-token storage. Built with Axum and SQLite.
 
 ## Run
 
@@ -26,7 +26,7 @@ The API listens on `127.0.0.1:3001` by default. Cargo compiles the service the f
 - `JWT_ENCRYPTION_KEY` — 32-byte AES-256 key encoded as 64 hexadecimal characters. Required to enable saving university tokens. The backend loads it from the process environment or a root `.env` file.
 - `RUST_LOG` — tracing filter; defaults to `studyspace_backend=info,tower_http=info`.
 
-The backend creates the data directory, database, and tables automatically on startup. Keep the SQLite database and its directory backed up to preserve accounts and shortcuts.
+The backend creates the data directory, database, and tables automatically on startup. Keep the SQLite database and its directory backed up to preserve accounts and saved data.
 
 To enable token storage for local development, generate a key once and put it in a root `.env` file:
 
@@ -65,6 +65,9 @@ All endpoints are served under `/api`. Successful account creation and login set
 | `GET` | `/api/integrations/university/token` | Return whether this user has a saved token and whether encrypted token storage is enabled |
 | `PUT` | `/api/integrations/university/token` | Save or replace the signed-in user's JWT with `{ "token": "..." }` |
 | `DELETE` | `/api/integrations/university/token` | Delete the signed-in user's saved JWT |
+| `GET` | `/api/pdfs` | List the signed-in user's PDF metadata |
+| `POST` | `/api/pdfs` | Upload a PDF as the raw request body with `Content-Type: application/pdf` and a percent-encoded `X-File-Name` header |
+| `GET` | `/api/pdfs/{id}/file` | View a PDF inline; add `?download=1` to download it |
 
 Shortcut responses include `id`, `name`, `url`, and `icon_data`. `icon_data` is a data URL when a supported favicon was found; otherwise it is `null`. Shortcut URLs without a scheme are treated as HTTPS. Duplicate URLs are rejected per account.
 
@@ -73,6 +76,8 @@ Calendar create/update requests use `event_type: "event"` with `schedule: "once"
 ## Security notes
 
 Passwords are hashed with Argon2id. Session tokens are random, stored in the database only as SHA-256 hashes, and sent in HttpOnly cookies. Shortcuts, notes, tasks, calendar events, and deletion operations are scoped to the authenticated user. Note titles are limited to 120 characters, note content to 50,000 characters, and task text to 300 characters. Calendar titles are limited to 120 characters, descriptions to 4,000 characters, reminders to 30 days, and class weekdays use ISO numbering (Monday=1 through Sunday=7).
+
+PDF uploads must have a `.pdf` filename, an `application/pdf` content type, and a PDF file signature; files are limited to 5 MB. PDF contents and metadata are stored in SQLite and all list/view/download operations require authentication and are scoped to the signed-in user.
 
 University tokens are encrypted with AES-256-GCM before being written to SQLite. The encryption key comes from `JWT_ENCRYPTION_KEY` and is never stored in the database. The API never returns a saved token; it returns only whether one is saved and its update time. Tokens may be opaque values or JWTs; input is limited to 16 KB and cannot contain whitespace or control characters. The backend does not verify the token or use it to sign in to or navigate the university website.
 

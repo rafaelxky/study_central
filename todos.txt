@@ -31,3 +31,7 @@ X - add a todo list in main were I can add remove and check tasks
 - should be able to unpin notes from dashboard
 
 - checklist should have its own vertical scroll for pc, add a dedicated page for todo list in paralel with the dashboard version
+
+- pdf upload and see from website
+
+- organize study material, notes, drawings, pictures, exercises,dps, urls to websites and relevant data etc
