@@ -35,3 +35,5 @@ X - add a todo list in main were I can add remove and check tasks
 - pdf upload and see from website
 
 - organize study material, notes, drawings, pictures, exercises,dps, urls to websites and relevant data etc
+
+- should be able to delete pdfs

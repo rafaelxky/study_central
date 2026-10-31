@@ -251,10 +251,35 @@ async function readApiResponse<T extends { error?: string }>(
   try {
     result = JSON.parse(responseBody) as T
   } catch {
-    const detail = responseBody.trim()
-      ? `The server returned an invalid response (HTTP ${response.status}).`
-      : `The server returned an empty response (HTTP ${response.status}).`
-    throw new Error(`${detail} Make sure the backend is running with ./run_backend.sh.`)
+    const endpoint = response.url
+      ? new URL(response.url).pathname
+      : 'the API endpoint'
+    const contentType = response.headers.get('content-type') ?? 'not provided'
+    let responseText = responseBody
+    if (contentType.toLowerCase().includes('text/html')) {
+      const parsedResponse = new DOMParser().parseFromString(responseBody, 'text/html')
+      parsedResponse.querySelectorAll('script, style, noscript').forEach((element) => element.remove())
+      responseText = parsedResponse.body.textContent ?? ''
+    }
+    const excerpt = responseText.replace(/\s+/g, ' ').trim().slice(0, 800)
+    const status = `${response.status}${response.statusText ? ` ${response.statusText}` : ''}`
+    const server = response.headers.get('server')
+    const requestId = response.headers.get('cf-ray')
+      ?? response.headers.get('x-request-id')
+      ?? response.headers.get('x-correlation-id')
+    const retryAfter = response.headers.get('retry-after')
+    const message = [
+      `The request to ${endpoint} received HTTP ${status}, but the server did not return the expected JSON response.`,
+      `Response content type: ${contentType}.`,
+      server ? `Server: ${server}.` : '',
+      requestId ? `Request ID: ${requestId}.` : '',
+      retryAfter ? `Retry after: ${retryAfter}.` : '',
+      excerpt ? `Server response: ${excerpt}${responseText.trim().length > 800 ? '…' : ''}` : 'The server returned an empty response body.',
+      response.status >= 500
+        ? 'This indicates a server, reverse-proxy, or deployment error. Check the backend and proxy logs (or the Worker/D1 logs if deployed); restarting the backend may not resolve a proxy or deployment failure.'
+        : 'Check that this API endpoint is served by the application backend.',
+    ].filter(Boolean).join(' ')
+    throw new Error(message)
   }
 
   if (!response.ok) {
