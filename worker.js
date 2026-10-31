@@ -1,6 +1,7 @@
 const SESSION_SECONDS = 60 * 60 * 24 * 7;
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_PDF_BYTES = 5_000_000;
+const PDF_CHUNK_BYTES = 1_000_000;
 const MAX_UNIVERSITY_TOKEN_BYTES = 16 * 1024;
 const PASSWORD_ITERATIONS = 50_000;
 const CALENDAR_COLORS = new Set([
@@ -480,10 +481,18 @@ async function uploadPdf(request, db) {
   const content = await readPdfBody(request);
   const id = randomToken();
   const uploadedAt = timestamp();
-  await db.prepare(
-    `INSERT INTO pdfs (id, user_id, filename, content, size_bytes, uploaded_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).bind(id, user.id, filename, content, content.byteLength, uploadedAt).run();
+  const statements = [
+    db.prepare(
+      `INSERT INTO pdfs (id, user_id, filename, content, size_bytes, uploaded_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind(id, user.id, filename, new Uint8Array(0), content.byteLength, uploadedAt),
+  ];
+  for (let offset = 0, chunkIndex = 0; offset < content.byteLength; offset += PDF_CHUNK_BYTES, chunkIndex += 1) {
+    statements.push(db.prepare(
+      "INSERT INTO pdf_chunks (pdf_id, chunk_index, content) VALUES (?, ?, ?)",
+    ).bind(id, chunkIndex, content.subarray(offset, Math.min(offset + PDF_CHUNK_BYTES, content.byteLength))));
+  }
+  await db.batch(statements);
   return jsonResponse({
     pdf: { id, filename, size_bytes: content.byteLength, uploaded_at: uploadedAt },
   }, 201);
@@ -498,14 +507,31 @@ function encodePdfFilename(filename) {
 async function getPdfFile(request, db, id) {
   const user = await requireUser(request, db);
   const row = await db.prepare(
-    "SELECT filename, content FROM pdfs WHERE id = ? AND user_id = ?",
+    "SELECT filename, content, size_bytes FROM pdfs WHERE id = ? AND user_id = ?",
   ).bind(id, user.id).first();
   if (!row) fail(404, "PDF not found.");
+  let content = row.content;
+  if (content.byteLength === 0) {
+    const result = await db.prepare(
+      "SELECT content FROM pdf_chunks WHERE pdf_id = ? ORDER BY chunk_index",
+    ).bind(id).all();
+    const chunks = result.results.map((chunk) => chunk.content);
+    const totalBytes = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+    if (totalBytes !== row.size_bytes || chunks.length === 0) {
+      throw new Error(`PDF ${id} has missing or incomplete stored content.`);
+    }
+    content = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      content.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+  }
   const disposition = new URL(request.url).searchParams.get("download") === "1"
     ? "attachment"
     : "inline";
   const filename = encodePdfFilename(row.filename);
-  return new Response(row.content, {
+  return new Response(content, {
     headers: {
       "Cache-Control": "no-store",
       "Content-Disposition": `${disposition}; filename="document.pdf"; filename*=UTF-8''${filename}`,

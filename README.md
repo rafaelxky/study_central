@@ -41,6 +41,7 @@ The local Rust backend fetches a site's `/favicon.ico` when a shortcut is added 
 ## Cloudflare Workers deployment
 
 The Worker serves the frontend and handles same-origin `/api` requests using D1. There is no separate API server or `API_ORIGIN`.
+PDF uploads are split into 1 MB D1 rows to stay within D1's 2 MB per-row limit; the deployment migration creates the chunk table.
 
 1. The `study-central` D1 database is configured in `wrangler.toml` with database ID `41665065-15cb-46a3-a96b-c290c04b96d1`. If recreating the database, create it with `npm run d1:create` and replace the ID in `wrangler.toml` with the new one.
 2. In the Worker's **Settings → Variables and Secrets**, add `JWT_ENCRYPTION_KEY` as a secret if you want to enable encrypted university-token storage. Use a randomly generated 32-byte (64-character hex) key and keep it stable; changing or losing it makes saved tokens unreadable.

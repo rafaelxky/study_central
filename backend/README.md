@@ -77,7 +77,7 @@ Calendar create/update requests use `event_type: "event"` with `schedule: "once"
 
 Passwords are hashed with Argon2id. Session tokens are random, stored in the database only as SHA-256 hashes, and sent in HttpOnly cookies. Shortcuts, notes, tasks, calendar events, and deletion operations are scoped to the authenticated user. Note titles are limited to 120 characters, note content to 50,000 characters, and task text to 300 characters. Calendar titles are limited to 120 characters, descriptions to 4,000 characters, reminders to 30 days, and class weekdays use ISO numbering (Monday=1 through Sunday=7).
 
-PDF uploads must have a `.pdf` filename, an `application/pdf` content type, and a PDF file signature; files are limited to 5 MB. PDF contents and metadata are stored in SQLite and all list/view/download operations require authentication and are scoped to the signed-in user.
+PDF uploads must have a `.pdf` filename, an `application/pdf` content type, and a PDF file signature; files are limited to 5 MB. PDF contents and metadata are stored in SQLite and all list/view/download operations require authentication and are scoped to the signed-in user. The Nginx API proxy allows request bodies up to 6 MB so PDFs at the full size limit can be uploaded.
 
 University tokens are encrypted with AES-256-GCM before being written to SQLite. The encryption key comes from `JWT_ENCRYPTION_KEY` and is never stored in the database. The API never returns a saved token; it returns only whether one is saved and its update time. Tokens may be opaque values or JWTs; input is limited to 16 KB and cannot contain whitespace or control characters. The backend does not verify the token or use it to sign in to or navigate the university website.
 
