@@ -25,7 +25,7 @@ X - add a notes section were I can create new notes and organize them. The serve
 X - add a todo list in main were I can add remove and check tasks
 - add a calendar were I can mark events and weekly classes are listed, it must allow for title and description of each event or class and color coding, must allow for one day events such as tests and also weekly stuff, for daily it must allow me to choose how many days before to notify me. A notification is just in the bell. When I press the bell it drops down saying what is predetermined then I can press to see more. 
 
-- allow to edit the shortcuts
+X - allow to edit the shortcuts
 - add shortcut folders
 
 - should be able to unpin notes from dashboard
@@ -36,4 +36,4 @@ X - add a todo list in main were I can add remove and check tasks
 
 - organize study material, notes, drawings, pictures, exercises,dps, urls to websites and relevant data etc
 
-- should be able to delete pdfs
+X - should be able to delete pdfs

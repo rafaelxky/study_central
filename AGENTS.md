@@ -20,6 +20,9 @@ Studyspace helps students organize school work and quickly reach the websites th
 ## Backend and data
 
 - Use Rust and Axum for backend changes. Keep database access in SQLite through SQLx.
+- Keep API behavior consistent in both `backend/src/main.rs` (local Rust) and `worker.js` (Cloudflare); frontend `/api` endpoints must exist in both implementations.
+- Courses organize shortcuts, notes, calendar events, and PDFs through optional `course_id` associations. Keep all reads and writes scoped to the authenticated user; deleting a course must preserve its materials as unassigned.
+- Add Cloudflare schema changes as ordered SQL files in `migrations/`; the Rust backend must also create or upgrade the local SQLite schema at startup.
 - Scope private data and every read, update, and delete operation to the authenticated user.
 - Never store passwords in plain text. Keep session credentials in secure, HttpOnly cookies; do not expose session tokens or server secrets to frontend code.
 - When a requested feature handles user-pasted external credentials, scope them to that user, encrypt them at rest, and never return saved credentials to the browser.
@@ -32,5 +35,4 @@ Studyspace helps students organize school work and quickly reach the websites th
 - For backend changes, run `cargo fmt --manifest-path backend/Cargo.toml` and `cargo test --manifest-path backend/Cargo.toml`.
 - Start the backend with `./run_backend.sh` and the frontend with `./run_frontend.sh` in separate terminals when manual integration checks are needed.
 - Update the relevant README when setup or user-facing behavior changes.
-
 

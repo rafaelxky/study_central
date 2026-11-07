@@ -1,0 +1,13 @@
+CREATE TABLE IF NOT EXISTS courses (
+    id TEXT PRIMARY KEY NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(user_id, name)
+);
+
+ALTER TABLE shortcuts ADD COLUMN course_id TEXT REFERENCES courses(id) ON DELETE SET NULL;
+ALTER TABLE notes ADD COLUMN course_id TEXT REFERENCES courses(id) ON DELETE SET NULL;
+ALTER TABLE calendar_events ADD COLUMN course_id TEXT REFERENCES courses(id) ON DELETE SET NULL;
+ALTER TABLE pdfs ADD COLUMN course_id TEXT REFERENCES courses(id) ON DELETE SET NULL;

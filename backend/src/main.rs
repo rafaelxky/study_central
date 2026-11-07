@@ -43,6 +43,9 @@ const MAX_FAVICON_BYTES: usize = 64 * 1024;
 const MAX_WEBSITE_HTML_BYTES: usize = 512 * 1024;
 const MAX_UNIVERSITY_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_PDF_BYTES: usize = 5_000_000;
+const COURSE_COLORS: [&str; 6] = [
+    "#bda7f5", "#f2a6a0", "#f2c879", "#83c9ad", "#83b8e8", "#d99bc8",
+];
 
 #[derive(Clone)]
 struct AppState {
@@ -59,6 +62,7 @@ struct PdfMetadata {
     filename: String,
     size_bytes: i64,
     uploaded_at: i64,
+    course_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -74,6 +78,35 @@ struct PdfResponse {
 #[derive(Deserialize)]
 struct PdfFileQuery {
     download: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SaveCourseRequest {
+    name: String,
+    color: String,
+}
+
+#[derive(Serialize)]
+struct Course {
+    id: String,
+    name: String,
+    color: String,
+    created_at: i64,
+}
+
+#[derive(Serialize)]
+struct CoursesResponse {
+    courses: Vec<Course>,
+}
+
+#[derive(Serialize)]
+struct CourseResponse {
+    course: Course,
+}
+
+#[derive(Deserialize)]
+struct CourseAssociationRequest {
+    course_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -136,6 +169,7 @@ struct OptionalUserResponse {
 struct CreateShortcutRequest {
     name: String,
     url: String,
+    course_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -144,6 +178,7 @@ struct Shortcut {
     name: String,
     url: String,
     icon_data: Option<String>,
+    course_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -161,6 +196,7 @@ struct SaveNoteRequest {
     title: String,
     content: String,
     pinned: bool,
+    course_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -170,6 +206,7 @@ struct Note {
     content: String,
     pinned: bool,
     updated_at: i64,
+    course_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -224,6 +261,7 @@ struct SaveCalendarEventRequest {
     start_time: Option<String>,
     end_time: Option<String>,
     reminder_days: u8,
+    course_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -241,6 +279,7 @@ struct CalendarEvent {
     start_time: Option<String>,
     end_time: Option<String>,
     reminder_days: u8,
+    course_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -266,6 +305,7 @@ struct ValidatedCalendarEvent {
     start_time: Option<String>,
     end_time: Option<String>,
     reminder_days: u8,
+    course_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -322,9 +362,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .execute(&pool)
     .await?;
     sqlx::query(
+        "CREATE TABLE IF NOT EXISTS courses (
+            id TEXT PRIMARY KEY NOT NULL,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            color TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            UNIQUE(user_id, name)
+        )",
+    )
+    .execute(&pool)
+    .await?;
+    sqlx::query(
         "CREATE TABLE IF NOT EXISTS pdfs (
             id TEXT PRIMARY KEY NOT NULL,
             user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            course_id TEXT REFERENCES courses(id) ON DELETE SET NULL,
             filename TEXT NOT NULL,
             content BLOB NOT NULL,
             size_bytes INTEGER NOT NULL,
@@ -375,6 +428,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "CREATE TABLE IF NOT EXISTS shortcuts (
             id TEXT PRIMARY KEY NOT NULL,
             user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            course_id TEXT REFERENCES courses(id) ON DELETE SET NULL,
             name TEXT NOT NULL,
             url TEXT NOT NULL,
             icon_data TEXT,
@@ -388,6 +442,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "CREATE TABLE IF NOT EXISTS notes (
             id TEXT PRIMARY KEY NOT NULL,
             user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            course_id TEXT REFERENCES courses(id) ON DELETE SET NULL,
             title TEXT NOT NULL,
             content TEXT NOT NULL,
             pinned INTEGER NOT NULL DEFAULT 0,
@@ -400,6 +455,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "CREATE TABLE IF NOT EXISTS calendar_events (
             id TEXT PRIMARY KEY NOT NULL,
             user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            course_id TEXT REFERENCES courses(id) ON DELETE SET NULL,
             title TEXT NOT NULL,
             description TEXT NOT NULL,
             color TEXT NOT NULL,
@@ -416,6 +472,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .execute(&pool)
     .await?;
+    for table in ["shortcuts", "notes", "calendar_events", "pdfs"] {
+        ensure_course_column(&pool, table).await?;
+    }
 
     let dummy_password_hash = hash_password("not-a-real-user-password")
         .await
@@ -452,10 +511,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/auth/login", post(login))
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/me", get(current_user))
+        .route("/api/courses", get(list_courses).post(create_course))
+        .route(
+            "/api/courses/{id}",
+            axum::routing::put(update_course).delete(delete_course),
+        )
         .route("/api/shortcuts", get(list_shortcuts).post(create_shortcut))
         .route(
             "/api/shortcuts/{id}",
-            axum::routing::delete(delete_shortcut),
+            axum::routing::put(update_shortcut).delete(delete_shortcut),
         )
         .route("/api/notes", get(list_notes).post(create_note))
         .route(
@@ -487,7 +551,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .post(upload_pdf)
                 .route_layer(DefaultBodyLimit::max(MAX_PDF_BYTES)),
         )
-        .route("/api/pdfs/{id}", axum::routing::delete(delete_pdf))
+        .route(
+            "/api/pdfs/{id}",
+            axum::routing::put(update_pdf_course).delete(delete_pdf),
+        )
         .route("/api/pdfs/{id}/file", get(get_pdf_file))
         .with_state(state);
 
@@ -496,6 +563,226 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(address).await?;
     info!("Studyspace backend listening on http://{address}");
     axum::serve(listener, app).await?;
+    Ok(())
+}
+
+async fn ensure_course_column(pool: &SqlitePool, table: &str) -> Result<(), sqlx::Error> {
+    let columns: i64 = sqlx::query_scalar(&format!(
+        "SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = 'course_id'"
+    ))
+    .fetch_one(pool)
+    .await?;
+    if columns == 0 {
+        sqlx::query(&format!(
+            "ALTER TABLE {table} ADD COLUMN course_id TEXT REFERENCES courses(id) ON DELETE SET NULL"
+        ))
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
+async fn list_courses(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let user_id = authenticated_user_id(&state, &headers).await?;
+    let rows = sqlx::query_as::<_, (String, String, String, i64)>(
+        "SELECT id, name, color, created_at FROM courses
+         WHERE user_id = ? ORDER BY name COLLATE NOCASE, id",
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(ApiError::internal)?;
+    let courses = rows
+        .into_iter()
+        .map(|(id, name, color, created_at)| Course {
+            id,
+            name,
+            color,
+            created_at,
+        })
+        .collect();
+    let mut response = Json(CoursesResponse { courses }).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn create_course(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    request: Result<Json<SaveCourseRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let user_id = authenticated_user_id(&state, &headers).await?;
+    let Json(request) = request.map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Request body must contain valid JSON.",
+        )
+    })?;
+    let (name, color) = validate_course_fields(&request.name, &request.color)?;
+    let id = random_token();
+    let created_at = now()?;
+    let result = sqlx::query(
+        "INSERT INTO courses (id, user_id, name, color, created_at)
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(user_id)
+    .bind(name)
+    .bind(color)
+    .bind(created_at)
+    .execute(&state.pool)
+    .await;
+    if let Err(error) = result {
+        if let sqlx::Error::Database(database_error) = &error {
+            if database_error.is_unique_violation() {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "A course with that name already exists.",
+                ));
+            }
+        }
+        return Err(ApiError::internal(error));
+    }
+    let mut response = (
+        StatusCode::CREATED,
+        Json(CourseResponse {
+            course: Course {
+                id,
+                name: name.to_owned(),
+                color: color.to_owned(),
+                created_at,
+            },
+        }),
+    )
+        .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn update_course(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    request: Result<Json<SaveCourseRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let user_id = authenticated_user_id(&state, &headers).await?;
+    let Json(request) = request.map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Request body must contain valid JSON.",
+        )
+    })?;
+    let (name, color) = validate_course_fields(&request.name, &request.color)?;
+    let result =
+        match sqlx::query("UPDATE courses SET name = ?, color = ? WHERE id = ? AND user_id = ?")
+            .bind(name)
+            .bind(color)
+            .bind(&id)
+            .bind(&user_id)
+            .execute(&state.pool)
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                if let sqlx::Error::Database(database_error) = &error {
+                    if database_error.is_unique_violation() {
+                        return Err(ApiError::new(
+                            StatusCode::CONFLICT,
+                            "A course with that name already exists.",
+                        ));
+                    }
+                }
+                return Err(ApiError::internal(error));
+            }
+        };
+    if result.rows_affected() == 0 {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "Course not found."));
+    }
+    let created_at: i64 =
+        sqlx::query_scalar("SELECT created_at FROM courses WHERE id = ? AND user_id = ?")
+            .bind(&id)
+            .bind(&user_id)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(ApiError::internal)?;
+    let mut response = Json(CourseResponse {
+        course: Course {
+            id,
+            name: name.to_owned(),
+            color: color.to_owned(),
+            created_at,
+        },
+    })
+    .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn delete_course(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let user_id = authenticated_user_id(&state, &headers).await?;
+    let result = sqlx::query("DELETE FROM courses WHERE id = ? AND user_id = ?")
+        .bind(id)
+        .bind(user_id)
+        .execute(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+    if result.rows_affected() == 0 {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "Course not found."));
+    }
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+fn validate_course_fields<'a>(
+    name: &'a str,
+    color: &'a str,
+) -> Result<(&'a str, &'a str), ApiError> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Course name must be between 1 and 64 characters.",
+        ));
+    }
+    if !COURSE_COLORS.contains(&color) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Choose a supported course color.",
+        ));
+    }
+    Ok((name, color))
+}
+
+async fn validate_course_ownership(
+    pool: &SqlitePool,
+    user_id: &str,
+    course_id: Option<&str>,
+) -> Result<(), ApiError> {
+    let Some(course_id) = course_id else {
+        return Ok(());
+    };
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM courses WHERE id = ? AND user_id = ?)")
+            .bind(course_id)
+            .bind(user_id)
+            .fetch_one(pool)
+            .await
+            .map_err(ApiError::internal)?;
+    if !exists {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "Course not found."));
+    }
     Ok(())
 }
 
@@ -663,8 +950,8 @@ async fn list_shortcuts(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let user_id = authenticated_user_id(&state, &headers).await?;
-    let rows = sqlx::query_as::<_, (String, String, String, Option<String>)>(
-        "SELECT id, name, url, icon_data FROM shortcuts
+    let rows = sqlx::query_as::<_, (String, String, String, Option<String>, Option<String>)>(
+        "SELECT id, name, url, icon_data, course_id FROM shortcuts
          WHERE user_id = ? ORDER BY created_at, id",
     )
     .bind(user_id)
@@ -673,11 +960,12 @@ async fn list_shortcuts(
     .map_err(ApiError::internal)?;
     let shortcuts = rows
         .into_iter()
-        .map(|(id, name, url, icon_data)| Shortcut {
+        .map(|(id, name, url, icon_data, course_id)| Shortcut {
             id,
             name,
             url,
             icon_data,
+            course_id,
         })
         .collect();
     let mut response = Json(ShortcutsResponse { shortcuts }).into_response();
@@ -699,14 +987,9 @@ async fn create_shortcut(
             "Request body must contain valid JSON.",
         )
     })?;
-    let name = request.name.trim();
-    if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
-        return Err(ApiError::new(
-            StatusCode::BAD_REQUEST,
-            "Name must be between 1 and 64 characters.",
-        ));
-    }
+    let name = validate_shortcut_name(&request.name)?;
     let url = normalize_shortcut_url(&request.url)?;
+    validate_course_ownership(&state.pool, &user_id, request.course_id.as_deref()).await?;
     let icon_data = match fetch_favicon(&state.http_client, &url).await {
         Ok(icon) => icon,
         Err(reason) => {
@@ -718,8 +1001,8 @@ async fn create_shortcut(
     let id = random_token();
     let created_at = now()?;
     let result = sqlx::query(
-        "INSERT INTO shortcuts (id, user_id, name, url, icon_data, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO shortcuts (id, user_id, name, url, icon_data, created_at, course_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(user_id)
@@ -727,6 +1010,7 @@ async fn create_shortcut(
     .bind(&url)
     .bind(&icon_data)
     .bind(created_at)
+    .bind(&request.course_id)
     .execute(&state.pool)
     .await;
 
@@ -750,10 +1034,81 @@ async fn create_shortcut(
                 name: name.to_owned(),
                 url,
                 icon_data,
+                course_id: request.course_id,
             },
         }),
     )
         .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn update_shortcut(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    request: Result<Json<CreateShortcutRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let user_id = authenticated_user_id(&state, &headers).await?;
+    let Json(request) = request.map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Request body must contain valid JSON.",
+        )
+    })?;
+    let name = validate_shortcut_name(&request.name)?;
+    let url = normalize_shortcut_url(&request.url)?;
+    validate_course_ownership(&state.pool, &user_id, request.course_id.as_deref()).await?;
+    let icon_data = match fetch_favicon(&state.http_client, &url).await {
+        Ok(icon) => icon,
+        Err(reason) => {
+            warn!("Could not retrieve favicon for shortcut host: {reason}");
+            None
+        }
+    };
+
+    let result = match sqlx::query(
+        "UPDATE shortcuts SET name = ?, url = ?, icon_data = ?, course_id = ?
+         WHERE id = ? AND user_id = ?",
+    )
+    .bind(name)
+    .bind(&url)
+    .bind(&icon_data)
+    .bind(&request.course_id)
+    .bind(&id)
+    .bind(&user_id)
+    .execute(&state.pool)
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            if let sqlx::Error::Database(database_error) = &error {
+                if database_error.is_unique_violation() {
+                    return Err(ApiError::new(
+                        StatusCode::CONFLICT,
+                        "That URL is already in your shortcuts.",
+                    ));
+                }
+            }
+            return Err(ApiError::internal(error));
+        }
+    };
+    if result.rows_affected() == 0 {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "Shortcut not found."));
+    }
+
+    let mut response = Json(ShortcutResponse {
+        shortcut: Shortcut {
+            id,
+            name: name.to_owned(),
+            url,
+            icon_data,
+            course_id: request.course_id,
+        },
+    })
+    .into_response();
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -783,8 +1138,8 @@ async fn list_notes(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let user_id = authenticated_user_id(&state, &headers).await?;
-    let rows = sqlx::query_as::<_, (String, String, String, bool, i64)>(
-        "SELECT id, title, content, pinned, updated_at FROM notes
+    let rows = sqlx::query_as::<_, (String, String, String, bool, i64, Option<String>)>(
+        "SELECT id, title, content, pinned, updated_at, course_id FROM notes
          WHERE user_id = ? ORDER BY pinned DESC, updated_at DESC, id",
     )
     .bind(user_id)
@@ -793,12 +1148,13 @@ async fn list_notes(
     .map_err(ApiError::internal)?;
     let notes = rows
         .into_iter()
-        .map(|(id, title, content, pinned, updated_at)| Note {
+        .map(|(id, title, content, pinned, updated_at, course_id)| Note {
             id,
             title,
             content,
             pinned,
             updated_at,
+            course_id,
         })
         .collect();
     let mut response = Json(NotesResponse { notes }).into_response();
@@ -821,11 +1177,12 @@ async fn create_note(
         )
     })?;
     let (title, content) = validate_note_fields(&request.title, &request.content)?;
+    validate_course_ownership(&state.pool, &user_id, request.course_id.as_deref()).await?;
     let id = random_token();
     let updated_at = now()?;
     sqlx::query(
-        "INSERT INTO notes (id, user_id, title, content, pinned, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO notes (id, user_id, title, content, pinned, updated_at, course_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(user_id)
@@ -833,6 +1190,7 @@ async fn create_note(
     .bind(content)
     .bind(request.pinned)
     .bind(updated_at)
+    .bind(&request.course_id)
     .execute(&state.pool)
     .await
     .map_err(ApiError::internal)?;
@@ -846,6 +1204,7 @@ async fn create_note(
                 content: content.to_owned(),
                 pinned: request.pinned,
                 updated_at,
+                course_id: request.course_id,
             },
         }),
     )
@@ -870,15 +1229,17 @@ async fn update_note(
         )
     })?;
     let (title, content) = validate_note_fields(&request.title, &request.content)?;
+    validate_course_ownership(&state.pool, &user_id, request.course_id.as_deref()).await?;
     let updated_at = now()?;
     let result = sqlx::query(
-        "UPDATE notes SET title = ?, content = ?, pinned = ?, updated_at = ?
+        "UPDATE notes SET title = ?, content = ?, pinned = ?, updated_at = ?, course_id = ?
          WHERE id = ? AND user_id = ?",
     )
     .bind(title)
     .bind(content)
     .bind(request.pinned)
     .bind(updated_at)
+    .bind(&request.course_id)
     .bind(&id)
     .bind(&user_id)
     .execute(&state.pool)
@@ -895,6 +1256,7 @@ async fn update_note(
             content: content.to_owned(),
             pinned: request.pinned,
             updated_at,
+            course_id: request.course_id,
         },
     })
     .into_response();
@@ -1109,6 +1471,7 @@ type CalendarEventRow = (
     Option<String>,
     Option<String>,
     i64,
+    Option<String>,
 );
 
 fn calendar_event_from_row(row: CalendarEventRow) -> Result<CalendarEvent, ApiError> {
@@ -1126,6 +1489,7 @@ fn calendar_event_from_row(row: CalendarEventRow) -> Result<CalendarEvent, ApiEr
         start_time,
         end_time,
         reminder_days,
+        course_id,
     ) = row;
     let weekdays = serde_json::from_str(&weekdays).map_err(ApiError::internal)?;
     let reminder_days = u8::try_from(reminder_days).map_err(ApiError::internal)?;
@@ -1143,6 +1507,7 @@ fn calendar_event_from_row(row: CalendarEventRow) -> Result<CalendarEvent, ApiEr
         start_time,
         end_time,
         reminder_days,
+        course_id,
     })
 }
 
@@ -1153,7 +1518,7 @@ async fn list_calendar_events(
     let user_id = authenticated_user_id(&state, &headers).await?;
     let rows = sqlx::query_as::<_, CalendarEventRow>(
         "SELECT id, title, description, color, event_type, schedule, event_date,
-                start_date, end_date, weekdays, start_time, end_time, reminder_days
+                start_date, end_date, weekdays, start_time, end_time, reminder_days, course_id
          FROM calendar_events WHERE user_id = ? ORDER BY COALESCE(event_date, start_date), title",
     )
     .bind(user_id)
@@ -1184,6 +1549,7 @@ async fn create_calendar_event(
         )
     })?;
     let event = validate_calendar_event(request)?;
+    validate_course_ownership(&state.pool, &user_id, event.course_id.as_deref()).await?;
     let id = random_token();
     save_calendar_event(&state, &user_id, &id, &event).await?;
     let mut response = (
@@ -1213,10 +1579,11 @@ async fn update_calendar_event(
         )
     })?;
     let event = validate_calendar_event(request)?;
+    validate_course_ownership(&state.pool, &user_id, event.course_id.as_deref()).await?;
     let result = sqlx::query(
         "UPDATE calendar_events SET title = ?, description = ?, color = ?, event_type = ?,
          schedule = ?, event_date = ?, start_date = ?, end_date = ?, weekdays = ?,
-         start_time = ?, end_time = ?, reminder_days = ?
+         start_time = ?, end_time = ?, reminder_days = ?, course_id = ?
          WHERE id = ? AND user_id = ?",
     )
     .bind(&event.title)
@@ -1231,6 +1598,7 @@ async fn update_calendar_event(
     .bind(&event.start_time)
     .bind(&event.end_time)
     .bind(event.reminder_days)
+    .bind(&event.course_id)
     .bind(&id)
     .bind(&user_id)
     .execute(&state.pool)
@@ -1262,8 +1630,8 @@ async fn save_calendar_event(
     sqlx::query(
         "INSERT INTO calendar_events
          (id, user_id, title, description, color, event_type, schedule, event_date,
-          start_date, end_date, weekdays, start_time, end_time, reminder_days)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          start_date, end_date, weekdays, start_time, end_time, reminder_days, course_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id)
     .bind(user_id)
@@ -1279,6 +1647,7 @@ async fn save_calendar_event(
     .bind(&event.start_time)
     .bind(&event.end_time)
     .bind(event.reminder_days)
+    .bind(&event.course_id)
     .execute(&state.pool)
     .await
     .map_err(ApiError::internal)?;
@@ -1321,6 +1690,7 @@ fn calendar_event_from_validated(id: String, event: ValidatedCalendarEvent) -> C
         start_time: event.start_time,
         end_time: event.end_time,
         reminder_days: event.reminder_days,
+        course_id: event.course_id,
     }
 }
 
@@ -1435,6 +1805,7 @@ fn validate_calendar_event(
         start_time,
         end_time,
         reminder_days: request.reminder_days,
+        course_id: request.course_id,
     })
 }
 
@@ -1515,8 +1886,8 @@ async fn list_pdfs(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let user_id = authenticated_user_id(&state, &headers).await?;
-    let rows = sqlx::query_as::<_, (String, String, i64, i64)>(
-        "SELECT id, filename, size_bytes, uploaded_at
+    let rows = sqlx::query_as::<_, (String, String, i64, i64, Option<String>)>(
+        "SELECT id, filename, size_bytes, uploaded_at, course_id
          FROM pdfs WHERE user_id = ? ORDER BY uploaded_at DESC, id",
     )
     .bind(user_id)
@@ -1525,12 +1896,15 @@ async fn list_pdfs(
     .map_err(ApiError::internal)?;
     let pdfs = rows
         .into_iter()
-        .map(|(id, filename, size_bytes, uploaded_at)| PdfMetadata {
-            id,
-            filename,
-            size_bytes,
-            uploaded_at,
-        })
+        .map(
+            |(id, filename, size_bytes, uploaded_at, course_id)| PdfMetadata {
+                id,
+                filename,
+                size_bytes,
+                uploaded_at,
+                course_id,
+            },
+        )
         .collect();
     let mut response = Json(PdfsResponse { pdfs }).into_response();
     response
@@ -1545,6 +1919,12 @@ async fn upload_pdf(
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Response, ApiError> {
     let user_id = authenticated_user_id(&state, &headers).await?;
+    let course_id = headers
+        .get("x-course-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned);
+    validate_course_ownership(&state.pool, &user_id, course_id.as_deref()).await?;
     let body = body.map_err(|rejection| {
         if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
             ApiError::new(
@@ -1599,8 +1979,8 @@ async fn upload_pdf(
     let uploaded_at = now()?;
     let size_bytes = i64::try_from(body.len()).map_err(ApiError::internal)?;
     sqlx::query(
-        "INSERT INTO pdfs (id, user_id, filename, content, size_bytes, uploaded_at)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO pdfs (id, user_id, filename, content, size_bytes, uploaded_at, course_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(user_id)
@@ -1608,6 +1988,7 @@ async fn upload_pdf(
     .bind(body.as_ref())
     .bind(size_bytes)
     .bind(uploaded_at)
+    .bind(&course_id)
     .execute(&state.pool)
     .await
     .map_err(ApiError::internal)?;
@@ -1619,10 +2000,59 @@ async fn upload_pdf(
                 filename,
                 size_bytes,
                 uploaded_at,
+                course_id,
             },
         }),
     )
         .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+async fn update_pdf_course(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    request: Result<Json<CourseAssociationRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let user_id = authenticated_user_id(&state, &headers).await?;
+    let Json(request) = request.map_err(|_| {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Request body must contain valid JSON.",
+        )
+    })?;
+    validate_course_ownership(&state.pool, &user_id, request.course_id.as_deref()).await?;
+    let result = sqlx::query("UPDATE pdfs SET course_id = ? WHERE id = ? AND user_id = ?")
+        .bind(&request.course_id)
+        .bind(&id)
+        .bind(&user_id)
+        .execute(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+    if result.rows_affected() == 0 {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "PDF not found."));
+    }
+    let row = sqlx::query_as::<_, (String, i64, i64)>(
+        "SELECT filename, size_bytes, uploaded_at FROM pdfs WHERE id = ? AND user_id = ?",
+    )
+    .bind(&id)
+    .bind(&user_id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(ApiError::internal)?;
+    let mut response = Json(PdfResponse {
+        pdf: PdfMetadata {
+            id,
+            filename: row.0,
+            size_bytes: row.1,
+            uploaded_at: row.2,
+            course_id: request.course_id,
+        },
+    })
+    .into_response();
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -1885,6 +2315,17 @@ fn encrypt_university_token(cipher: &Aes256Gcm, token: &str) -> Result<(String, 
         URL_SAFE_NO_PAD.encode(nonce_bytes),
         URL_SAFE_NO_PAD.encode(ciphertext),
     ))
+}
+
+fn validate_shortcut_name(name: &str) -> Result<&str, ApiError> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "Name must be between 1 and 64 characters.",
+        ));
+    }
+    Ok(name)
 }
 
 fn normalize_shortcut_url(input: &str) -> Result<String, ApiError> {
@@ -2277,15 +2718,17 @@ fn clear_session_cookie(response: &mut Response, secure: bool) -> Result<(), Api
 mod tests {
     use super::{
         SaveCalendarEventRequest, decode_pdf_filename, encode_pdf_filename,
-        encrypt_university_token, is_public_ip, normalize_email, normalize_shortcut_url,
-        parse_encryption_key, valid_calendar_date, validate_calendar_event, validate_note_fields,
-        validate_password, validate_task_text, validate_university_token, validate_username,
+        encrypt_university_token, ensure_course_column, is_public_ip, normalize_email,
+        normalize_shortcut_url, parse_encryption_key, valid_calendar_date, validate_calendar_event,
+        validate_course_fields, validate_note_fields, validate_password, validate_shortcut_name,
+        validate_task_text, validate_university_token, validate_username,
     };
     use aes_gcm::{
         Aes256Gcm, Nonce,
         aead::{Aead, KeyInit},
     };
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use sqlx::sqlite::SqlitePoolOptions;
     use std::net::IpAddr;
 
     #[test]
@@ -2357,6 +2800,7 @@ mod tests {
             start_time: Some("09:30".to_owned()),
             end_time: Some("10:30".to_owned()),
             reminder_days: 2,
+            course_id: None,
         }
     }
 
@@ -2430,6 +2874,62 @@ mod tests {
         assert!(normalize_shortcut_url("javascript:alert(1)").is_err());
         assert!(normalize_shortcut_url("https://user:pass@example.com").is_err());
         assert!(normalize_shortcut_url("http://example.com:8080").is_err());
+    }
+
+    #[test]
+    fn shortcut_names_are_trimmed_and_bounded() {
+        assert_eq!(
+            validate_shortcut_name("  Course portal  ").unwrap(),
+            "Course portal"
+        );
+        assert!(validate_shortcut_name(" ").is_err());
+        assert!(validate_shortcut_name(&"x".repeat(65)).is_err());
+        assert!(validate_shortcut_name("bad\nname").is_err());
+    }
+
+    #[test]
+    fn course_names_and_colors_are_validated() {
+        assert_eq!(
+            validate_course_fields("  Biology  ", "#bda7f5").unwrap(),
+            ("Biology", "#bda7f5")
+        );
+        assert!(validate_course_fields(" ", "#bda7f5").is_err());
+        assert!(validate_course_fields("Biology", "red").is_err());
+    }
+
+    #[tokio::test]
+    async fn course_columns_are_added_to_existing_resource_tables() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE courses (id TEXT PRIMARY KEY, user_id TEXT, name TEXT, color TEXT, created_at INTEGER)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        for (table, sql) in [
+            ("shortcuts", "CREATE TABLE shortcuts (id TEXT PRIMARY KEY)"),
+            ("notes", "CREATE TABLE notes (id TEXT PRIMARY KEY)"),
+            (
+                "calendar_events",
+                "CREATE TABLE calendar_events (id TEXT PRIMARY KEY)",
+            ),
+            ("pdfs", "CREATE TABLE pdfs (id TEXT PRIMARY KEY)"),
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+            ensure_course_column(&pool, table).await.unwrap();
+            ensure_course_column(&pool, table).await.unwrap();
+            let column_exists: i64 = sqlx::query_scalar(&format!(
+                "SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = 'course_id'"
+            ))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(column_exists, 1);
+        }
     }
 
     #[test]

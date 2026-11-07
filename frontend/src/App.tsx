@@ -19,7 +19,7 @@ type IconName =
   | 'edit'
   | 'pdf'
 type AuthMode = 'login' | 'register'
-type WorkspacePage = 'dashboard' | 'notes' | 'calendar' | 'pdfs' | 'notifications'
+type WorkspacePage = 'dashboard' | 'courses' | 'notes' | 'calendar' | 'pdfs' | 'notifications'
 
 type User = {
   id: string
@@ -32,11 +32,25 @@ type AuthResponse = {
   error?: string
 }
 
+type Course = {
+  id: string
+  name: string
+  color: string
+  created_at: number
+}
+
+type CoursesResponse = {
+  courses?: Course[]
+  course?: Course
+  error?: string
+}
+
 type Shortcut = {
   id: string
   name: string
   url: string
   icon_data: string | null
+  course_id: string | null
 }
 
 type ShortcutsResponse = {
@@ -51,6 +65,7 @@ type Note = {
   content: string
   pinned: boolean
   updated_at: number
+  course_id: string | null
 }
 
 type NotesResponse = {
@@ -64,6 +79,7 @@ type PdfMetadata = {
   filename: string
   size_bytes: number
   uploaded_at: number
+  course_id: string | null
 }
 
 type PdfsResponse = {
@@ -99,6 +115,7 @@ type CalendarEvent = {
   start_time: string | null
   end_time: string | null
   reminder_days: number
+  course_id: string | null
 }
 
 type CalendarEventsResponse = {
@@ -131,6 +148,7 @@ const CALENDAR_COLORS = [
   { value: '#83b8e8', label: 'Blue' },
   { value: '#d99bc8', label: 'Pink' },
 ]
+const COURSE_COLORS = CALENDAR_COLORS
 const WEEKDAYS = [
   { value: 1, short: 'Mon', label: 'Monday' },
   { value: 2, short: 'Tue', label: 'Tuesday' },
@@ -206,11 +224,22 @@ function getCalendarReminders(events: CalendarEvent[], today = localDateString(n
 }
 
 function workspacePageFromPath(pathname: string): WorkspacePage {
+  if (pathname === '/courses' || pathname.startsWith('/courses/')) return 'courses'
   if (pathname === '/notes') return 'notes'
   if (pathname === '/calendar') return 'calendar'
   if (pathname === '/pdfs') return 'pdfs'
   if (pathname === '/notifications') return 'notifications'
   return 'dashboard'
+}
+
+function courseIdFromPath(pathname: string): string | null {
+  const prefix = '/courses/'
+  if (!pathname.startsWith(prefix)) return null
+  try {
+    return decodeURIComponent(pathname.slice(prefix.length)) || null
+  } catch {
+    return null
+  }
 }
 
 function makeCalendarDraft(date: string): CalendarEventDraft {
@@ -227,6 +256,7 @@ function makeCalendarDraft(date: string): CalendarEventDraft {
     start_time: null,
     end_time: null,
     reminder_days: 0,
+    course_id: null,
   }
 }
 
@@ -366,6 +396,28 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   )
 }
 
+function CourseSelect({
+  courses,
+  value,
+  onChange,
+}: {
+  courses: Course[]
+  value: string
+  onChange: (courseId: string) => void
+}) {
+  return (
+    <label className="course-select">
+      Course
+      <select onChange={(event) => onChange(event.target.value)} value={value}>
+        <option value="">No course</option>
+        {courses.map((course) => (
+          <option key={course.id} value={course.id}>{course.name}</option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
 async function authRequest(path: string, body?: object): Promise<AuthResponse> {
   const response = await fetch(`/api/auth/${path}`, {
     method: body ? 'POST' : 'GET',
@@ -379,9 +431,23 @@ async function authRequest(path: string, body?: object): Promise<AuthResponse> {
   return readApiResponse<AuthResponse>(response, 'Authentication failed.')
 }
 
+async function coursesRequest(
+  path = '',
+  options: { method?: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: object } = {},
+): Promise<CoursesResponse> {
+  const response = await fetch(`/api/courses${path}`, {
+    method: options.method ?? 'GET',
+    headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
+    credentials: 'same-origin',
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  })
+  if (response.status === 204) return {}
+  return readApiResponse<CoursesResponse>(response, 'Could not manage courses.')
+}
+
 async function shortcutsRequest(
   path = '',
-  options: { method?: 'POST' | 'DELETE'; body?: object } = {},
+  options: { method?: 'POST' | 'PUT' | 'DELETE'; body?: object } = {},
 ): Promise<ShortcutsResponse> {
   const response = await fetch(`/api/shortcuts${path}`, {
     method: options.method ?? 'GET',
@@ -454,17 +520,28 @@ async function universityTokenRequest(
   return readApiResponse<UniversityTokenStatus>(response, 'Could not manage the university token.')
 }
 
-async function pdfsRequest(file?: File): Promise<PdfsResponse> {
+async function pdfsRequest(file?: File, courseId?: string | null): Promise<PdfsResponse> {
   const response = await fetch('/api/pdfs', {
     method: file ? 'POST' : 'GET',
     headers: file ? {
       'Content-Type': 'application/pdf',
       'X-File-Name': encodeURIComponent(file.name),
+      ...(courseId ? { 'X-Course-Id': courseId } : {}),
     } : undefined,
     credentials: 'same-origin',
     body: file,
   })
   return readApiResponse<PdfsResponse>(response, file ? 'Could not upload the PDF.' : 'Could not load PDFs.')
+}
+
+async function updatePdfCourseRequest(id: string, courseId: string | null): Promise<PdfsResponse> {
+  const response = await fetch(`/api/pdfs/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ course_id: courseId }),
+  })
+  return readApiResponse<PdfsResponse>(response, 'Could not update the PDF course.')
 }
 
 async function deletePdfRequest(id: string): Promise<void> {
@@ -485,6 +562,8 @@ function formatFileSize(size: number): string {
 function App() {
   const [user, setUser] = useState<User | null>(() => readCachedUser())
   const [activePage, setActivePage] = useState<WorkspacePage>(() => workspacePageFromPath(window.location.pathname))
+  const activePageRef = useRef(activePage)
+  const [selectedCourseId, setSelectedCourseId] = useState<string | null>(() => courseIdFromPath(window.location.pathname))
   const [authChecked, setAuthChecked] = useState(false)
   const [mode, setMode] = useState<AuthMode>('login')
   const [username, setUsername] = useState('')
@@ -493,15 +572,27 @@ function App() {
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [shortcuts, setShortcuts] = useState<Shortcut[]>([])
+  const [courses, setCourses] = useState<Course[]>([])
+  const [coursesLoading, setCoursesLoading] = useState(true)
+  const [courseError, setCourseError] = useState('')
+  const [courseEditorOpen, setCourseEditorOpen] = useState(false)
+  const [editingCourseId, setEditingCourseId] = useState<string | null>(null)
+  const [courseNameDraft, setCourseNameDraft] = useState('')
+  const [courseColorDraft, setCourseColorDraft] = useState(COURSE_COLORS[0].value)
+  const [courseSaving, setCourseSaving] = useState(false)
   const [notes, setNotes] = useState<Note[]>([])
+  const [noteCourseId, setNoteCourseId] = useState('')
   const [tasks, setTasks] = useState<Task[]>([])
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([])
   const [pdfs, setPdfs] = useState<PdfMetadata[]>([])
-  const [pdfsLoading, setPdfsLoading] = useState(() => window.location.pathname === '/pdfs')
+  const [pdfsLoading, setPdfsLoading] = useState(() =>
+    window.location.pathname === '/pdfs' || workspacePageFromPath(window.location.pathname) === 'courses',
+  )
   const [pdfError, setPdfError] = useState('')
   const [pdfUploadBusy, setPdfUploadBusy] = useState(false)
   const [pdfDragActive, setPdfDragActive] = useState(false)
   const [pdfFileName, setPdfFileName] = useState('')
+  const [pdfCourseId, setPdfCourseId] = useState<string | null>(null)
   const [selectedPdfId, setSelectedPdfId] = useState<string | null>(null)
   const [pdfFullscreen, setPdfFullscreen] = useState(false)
   const pdfViewerRef = useRef<HTMLDivElement>(null)
@@ -539,6 +630,8 @@ function App() {
   const [shortcutOpen, setShortcutOpen] = useState(false)
   const [shortcutName, setShortcutName] = useState('')
   const [shortcutUrl, setShortcutUrl] = useState('')
+  const [shortcutCourseId, setShortcutCourseId] = useState('')
+  const [editingShortcutId, setEditingShortcutId] = useState<string | null>(null)
   const [shortcutError, setShortcutError] = useState('')
   const [shortcutSubmitting, setShortcutSubmitting] = useState(false)
   const [universityTokenOpen, setUniversityTokenOpen] = useState(false)
@@ -557,11 +650,14 @@ function App() {
     let active = true
     const handlePopState = () => {
       const page = workspacePageFromPath(window.location.pathname)
-      setActivePage(page)
-      if (page === 'pdfs') {
+      const previousPage = activePageRef.current
+      activePageRef.current = page
+      if (page !== previousPage && (page === 'pdfs' || page === 'courses')) {
         setPdfsLoading(true)
         setPdfError('')
       }
+      setActivePage(page)
+      setSelectedCourseId(courseIdFromPath(window.location.pathname))
     }
     window.addEventListener('popstate', handlePopState)
 
@@ -572,15 +668,38 @@ function App() {
         setUser(currentUser ?? null)
         cacheUser(currentUser ?? null)
         const destination = currentUser
-          ? ['/', '/notes', '/calendar', '/pdfs', '/notifications'].includes(window.location.pathname)
+          ? ['/', '/notes', '/calendar', '/pdfs', '/notifications', '/courses'].includes(window.location.pathname)
+            || window.location.pathname.startsWith('/courses/')
             ? window.location.pathname
             : '/'
           : '/login'
         if (window.location.pathname !== destination) {
           window.history.replaceState(null, '', destination)
         }
-        setActivePage(workspacePageFromPath(destination))
+        const destinationPage = workspacePageFromPath(destination)
+        activePageRef.current = destinationPage
+        setActivePage(destinationPage)
+        setSelectedCourseId(courseIdFromPath(destination))
         if (currentUser) {
+          setCoursesLoading(true)
+          try {
+            const result = await coursesRequest()
+            if (active) {
+              const nextCourses = result.courses ?? []
+              setCourses(nextCourses)
+              setSelectedCourseId((current) =>
+                current === 'all' || current === 'unassigned'
+                  ? current
+                  : current && nextCourses.some((course) => course.id === current) ? current : null,
+              )
+            }
+          } catch (requestError) {
+            if (active) {
+              setCourseError(requestError instanceof Error ? requestError.message : 'Could not load courses.')
+            }
+          } finally {
+            if (active) setCoursesLoading(false)
+          }
           setShortcutsLoading(true)
           try {
             const result = await shortcutsRequest()
@@ -653,6 +772,7 @@ function App() {
           setNotesLoading(false)
           setTasksLoading(false)
           setCalendarLoading(false)
+          setCoursesLoading(false)
           setAuthChecked(true)
         }
       }
@@ -667,7 +787,7 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!user || activePage !== 'pdfs') return
+    if (!user || (activePage !== 'pdfs' && activePage !== 'courses')) return
     let active = true
     void pdfsRequest()
       .then((result) => {
@@ -709,6 +829,16 @@ function App() {
       setNotesLoading(true)
       setTasksLoading(true)
       setCalendarLoading(true)
+      setCoursesLoading(true)
+      try {
+        const courseResult = await coursesRequest()
+        setCourses(courseResult.courses ?? [])
+        setCourseError('')
+      } catch (requestError) {
+        setCourseError(requestError instanceof Error ? requestError.message : 'Could not load courses.')
+      } finally {
+        setCoursesLoading(false)
+      }
       try {
         const shortcutResult = await shortcutsRequest()
         setShortcuts(shortcutResult.shortcuts ?? [])
@@ -754,6 +884,7 @@ function App() {
       if (window.location.pathname !== '/') {
         window.history.replaceState(null, '', '/')
       }
+      activePageRef.current = 'dashboard'
       setActivePage('dashboard')
       setNotificationDropdownOpen(false)
     } catch (requestError) {
@@ -776,11 +907,14 @@ function App() {
         window.history.replaceState(null, '', '/login')
       }
       setShortcuts([])
+      setCourses([])
+      setSelectedCourseId(null)
       setNotes([])
       setTasks([])
       setCalendarEvents([])
       setPdfs([])
       setSelectedPdfId(null)
+      setPdfCourseId(null)
       setPdfError('')
       setTaskDraft('')
       setSearch('')
@@ -788,6 +922,7 @@ function App() {
       setUniversityToken('')
       setUniversityTokenError('')
       setUniversityTokenMessage('')
+      activePageRef.current = 'dashboard'
       setActivePage('dashboard')
       setNotificationDropdownOpen(false)
     } catch (requestError) {
@@ -795,23 +930,123 @@ function App() {
     }
   }
 
+  function openCourseEditor(course?: Course) {
+    setEditingCourseId(course?.id ?? null)
+    setCourseNameDraft(course?.name ?? '')
+    setCourseColorDraft(course?.color ?? COURSE_COLORS[0].value)
+    setCourseError('')
+    setCourseEditorOpen(true)
+  }
+
+  async function submitCourse(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setCourseSaving(true)
+    setCourseError('')
+    try {
+      const result = await coursesRequest(
+        editingCourseId ? `/${encodeURIComponent(editingCourseId)}` : '',
+        {
+          method: editingCourseId ? 'PUT' : 'POST',
+          body: { name: courseNameDraft, color: courseColorDraft },
+        },
+      )
+      const savedCourse = result.course
+      if (!savedCourse) throw new Error('The server did not return the saved course.')
+      setCourses((current) => [
+        ...current.filter((course) => course.id !== savedCourse.id),
+        savedCourse,
+      ].sort((a, b) => a.name.localeCompare(b.name)))
+      setCourseEditorOpen(false)
+    } catch (requestError) {
+      setCourseError(requestError instanceof Error ? requestError.message : 'Could not save the course.')
+    } finally {
+      setCourseSaving(false)
+    }
+  }
+
+  async function removeCourse(course: Course) {
+    if (!window.confirm(`Delete "${course.name}"? Its notes, PDFs, shortcuts, and calendar items will be kept without a course.`)) return
+    setCourseError('')
+    try {
+      await coursesRequest(`/${encodeURIComponent(course.id)}`, { method: 'DELETE' })
+      setCourses((current) => current.filter((item) => item.id !== course.id))
+      setPdfCourseId((current) => current === course.id ? '' : current)
+      setShortcuts((current) => current.map((item) =>
+        item.course_id === course.id ? { ...item, course_id: null } : item,
+      ))
+      setNotes((current) => current.map((item) =>
+        item.course_id === course.id ? { ...item, course_id: null } : item,
+      ))
+      setPdfs((current) => current.map((item) =>
+        item.course_id === course.id ? { ...item, course_id: null } : item,
+      ))
+      setCalendarEvents((current) => current.map((item) =>
+        item.course_id === course.id ? { ...item, course_id: null } : item,
+      ))
+      if (selectedCourseId === course.id) {
+        setSelectedCourseId(null)
+        if (window.location.pathname !== '/courses') {
+          window.history.replaceState(null, '', '/courses')
+        }
+      }
+    } catch (requestError) {
+      setCourseError(requestError instanceof Error ? requestError.message : 'Could not delete the course.')
+    }
+  }
+
+  function openCourse(course: Course) {
+    const path = `/courses/${encodeURIComponent(course.id)}`
+    if (window.location.pathname !== path) window.history.pushState(null, '', path)
+    setSelectedCourseId(course.id)
+    setActivePage('courses')
+  }
+
+  function showCourseList() {
+    if (window.location.pathname !== '/courses') window.history.pushState(null, '', '/courses')
+    setSelectedCourseId(null)
+  }
+
+  function openUnassignedMaterials() {
+    const path = '/courses/unassigned'
+    if (window.location.pathname !== path) window.history.pushState(null, '', path)
+    setSelectedCourseId('unassigned')
+    setActivePage('courses')
+  }
+
+  function openAllMaterials() {
+    const path = '/courses/all'
+    if (window.location.pathname !== path) window.history.pushState(null, '', path)
+    setSelectedCourseId('all')
+    setActivePage('courses')
+  }
+
   async function submitShortcut(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setShortcutError('')
     setShortcutSubmitting(true)
     try {
-      const result = await shortcutsRequest('', {
-        method: 'POST',
-        body: { name: shortcutName, url: shortcutUrl },
-      })
-      const newShortcut = result.shortcut
-      if (!newShortcut) throw new Error('The server did not return the shortcut.')
-      setShortcuts((current) => [...current, newShortcut])
+      const result = await shortcutsRequest(
+        editingShortcutId ? `/${encodeURIComponent(editingShortcutId)}` : '',
+        {
+          method: editingShortcutId ? 'PUT' : 'POST',
+          body: { name: shortcutName, url: shortcutUrl, course_id: shortcutCourseId || null },
+        },
+      )
+      const savedShortcut = result.shortcut
+      if (!savedShortcut) throw new Error('The server did not return the shortcut.')
+      if (editingShortcutId) {
+        setShortcuts((current) => current.map((shortcut) =>
+          shortcut.id === savedShortcut.id ? savedShortcut : shortcut,
+        ))
+      } else {
+        setShortcuts((current) => [...current, savedShortcut])
+      }
       setShortcutName('')
       setShortcutUrl('')
+      setEditingShortcutId(null)
       setShortcutOpen(false)
     } catch (requestError) {
-      setShortcutError(requestError instanceof Error ? requestError.message : 'Could not add shortcut.')
+      setShortcutError(requestError instanceof Error ? requestError.message : 'Could not save shortcut.')
     } finally {
       setShortcutSubmitting(false)
     }
@@ -827,11 +1062,21 @@ function App() {
     }
   }
 
+  function openShortcutEditor(shortcut?: Shortcut) {
+    setShortcutError('')
+    setEditingShortcutId(shortcut?.id ?? null)
+    setShortcutName(shortcut?.name ?? '')
+    setShortcutUrl(shortcut?.url ?? '')
+    setShortcutCourseId(shortcut?.course_id ?? selectedCourseForItems ?? '')
+    setShortcutOpen(true)
+  }
+
   function openNoteEditor(note?: Note) {
     setEditingNoteId(note?.id ?? null)
     setNoteTitle(note?.title ?? '')
     setNoteContent(note?.content ?? '')
     setNotePinned(note?.pinned ?? false)
+    setNoteCourseId(note?.course_id ?? selectedCourseForItems ?? '')
     setNoteEditorError('')
     setNoteEditorOpen(true)
   }
@@ -841,7 +1086,12 @@ function App() {
     setNoteSaving(true)
     setNoteEditorError('')
     try {
-      const body = { title: noteTitle, content: noteContent, pinned: notePinned }
+      const body = {
+        title: noteTitle,
+        content: noteContent,
+        pinned: notePinned,
+        course_id: noteCourseId || null,
+      }
       const result = await notesRequest(
         editingNoteId ? `/${encodeURIComponent(editingNoteId)}` : '',
         { method: editingNoteId ? 'PUT' : 'POST', body },
@@ -865,7 +1115,12 @@ function App() {
     try {
       const result = await notesRequest(`/${encodeURIComponent(note.id)}`, {
         method: 'PUT',
-        body: { title: note.title, content: note.content, pinned: !note.pinned },
+        body: {
+          title: note.title,
+          content: note.content,
+          pinned: !note.pinned,
+          course_id: note.course_id,
+        },
       })
       const updatedNote = result.note
       if (!updatedNote) throw new Error('The server did not return the updated note.')
@@ -940,16 +1195,19 @@ function App() {
   function navigateTo(page: WorkspacePage) {
     const path = page === 'dashboard'
       ? '/'
+      : page === 'courses' ? '/courses'
       : page === 'notes' ? '/notes'
         : page === 'calendar' ? '/calendar'
           : page === 'pdfs' ? '/pdfs' : '/notifications'
     if (window.location.pathname !== path) {
       window.history.pushState(null, '', path)
     }
-    if (page === 'pdfs' && activePage !== 'pdfs') {
+    setSelectedCourseId(null)
+    if ((page === 'pdfs' || page === 'courses') && activePageRef.current !== page) {
       setPdfsLoading(true)
       setPdfError('')
     }
+    activePageRef.current = page
     setActivePage(page)
     setNotificationDropdownOpen(false)
   }
@@ -972,7 +1230,7 @@ function App() {
     const uploadedPdfs: PdfMetadata[] = []
     try {
       for (const file of files) {
-        const result = await pdfsRequest(file)
+        const result = await pdfsRequest(file, pdfCourseId ?? selectedCourseForItems)
         const uploadedPdf = result.pdf
         if (!uploadedPdf) throw new Error('The server did not return the uploaded PDF.')
         uploadedPdfs.push(uploadedPdf)
@@ -1001,6 +1259,23 @@ function App() {
     } catch (requestError) {
       setPdfError(requestError instanceof Error ? requestError.message : 'Could not delete the PDF.')
     }
+  }
+
+  async function changePdfCourse(pdf: PdfMetadata, courseId: string) {
+    setPdfError('')
+    try {
+      const result = await updatePdfCourseRequest(pdf.id, courseId || null)
+      const updatedPdf = result.pdf
+      if (!updatedPdf) throw new Error('The server did not return the updated PDF.')
+      setPdfs((current) => current.map((item) => item.id === pdf.id ? updatedPdf : item))
+    } catch (requestError) {
+      setPdfError(requestError instanceof Error ? requestError.message : 'Could not update the PDF course.')
+    }
+  }
+
+  function openPdf(pdf: PdfMetadata) {
+    setSelectedPdfId(pdf.id)
+    navigateTo('pdfs')
   }
 
   function handlePdfDrop(event: React.DragEvent<HTMLElement>) {
@@ -1048,7 +1323,11 @@ function App() {
       start_time: event.start_time,
       end_time: event.end_time,
       reminder_days: event.reminder_days,
+      course_id: event.course_id,
     } : makeCalendarDraft(date))
+    if (!event) {
+      setCalendarDraft((current) => ({ ...current, course_id: selectedCourseForItems }))
+    }
     setCalendarEditorError('')
     setCalendarEditorOpen(true)
   }
@@ -1133,6 +1412,21 @@ function App() {
   const filteredShortcuts = shortcuts.filter((shortcut) =>
     `${shortcut.name} ${shortcut.url}`.toLowerCase().includes(search.toLowerCase()),
   )
+  const selectedCourse = courses.find((course) => course.id === selectedCourseId) ?? null
+  const viewingAllMaterials = selectedCourseId === 'all'
+  const viewingUnassigned = selectedCourseId === 'unassigned'
+  const selectedCourseForItems = viewingUnassigned ? null : selectedCourse?.id ?? null
+  const visibleCourseId = viewingUnassigned ? null : selectedCourse?.id
+  const courseNotes = viewingAllMaterials ? notes : notes.filter((note) => note.course_id === visibleCourseId)
+  const courseShortcuts = viewingAllMaterials ? shortcuts : shortcuts.filter((shortcut) => shortcut.course_id === visibleCourseId)
+  const coursePdfs = viewingAllMaterials ? pdfs : pdfs.filter((pdf) => pdf.course_id === visibleCourseId)
+  const courseCalendarEvents = viewingAllMaterials ? calendarEvents : calendarEvents.filter((event) => event.course_id === visibleCourseId)
+  const unassignedCount = [
+    shortcuts.filter((item) => item.course_id === null).length,
+    notes.filter((item) => item.course_id === null).length,
+    pdfs.filter((item) => item.course_id === null).length,
+    calendarEvents.filter((item) => item.course_id === null).length,
+  ].reduce((total, count) => total + count, 0)
   const calendarReminders = getCalendarReminders(calendarEvents, calendarToday)
   const calendarDates = getCalendarMonthDates(calendarMonth)
   const selectedDateEvents = calendarEvents.filter((event) => eventOccursOnDate(event, selectedCalendarDate))
@@ -1230,6 +1524,17 @@ function App() {
             <span>Dashboard</span>
           </button>
           <button
+            aria-label="Courses"
+            aria-current={activePage === 'courses' ? 'page' : undefined}
+            className={`sidebar-nav-item ${activePage === 'courses' ? 'sidebar-nav-item-active' : ''}`}
+            onClick={() => navigateTo('courses')}
+            type="button"
+          >
+            <Icon name="notes" size={17} />
+            <span>Courses</span>
+            {courses.length > 0 && <span className="sidebar-nav-count">{courses.length}</span>}
+          </button>
+          <button
             aria-current={activePage === 'notes' ? 'page' : undefined}
             className={`sidebar-nav-item ${activePage === 'notes' ? 'sidebar-nav-item-active' : ''}`}
             onClick={() => navigateTo('notes')}
@@ -1265,6 +1570,7 @@ function App() {
             <span>Workspace</span><Icon name="chevron" size={15} />
             <strong>
               {activePage === 'notes' ? 'Notes'
+                : activePage === 'courses' ? (viewingAllMaterials ? 'All materials' : viewingUnassigned ? 'Unassigned materials' : selectedCourse?.name ?? 'Courses')
                 : activePage === 'calendar' ? 'Calendar'
                   : activePage === 'pdfs' ? 'PDFs'
                   : activePage === 'notifications' ? 'Notifications' : 'Overview'}
@@ -1352,7 +1658,182 @@ function App() {
           </div>
         </header>
         {error && <p className="global-error" role="alert">{error}</p>}
-        {activePage === 'dashboard' ? (
+        {courseError && <p className="global-error" role="alert">{courseError}</p>}
+        {activePage === 'courses' ? (
+          <section className="dashboard courses-page">
+            {selectedCourseId && (selectedCourse || viewingUnassigned || viewingAllMaterials) ? (
+              <>
+                <div className="dashboard-heading">
+                  <div
+                    className="course-page-title"
+                    style={selectedCourse ? { '--course-color': selectedCourse.color } as React.CSSProperties : undefined}
+                  >
+                    <p className="dashboard-eyebrow">YOUR STUDYSPACE</p>
+                    <h1>
+                      {viewingAllMaterials
+                        ? 'All materials'
+                        : viewingUnassigned ? 'Unassigned materials' : selectedCourse?.name}
+                    </h1>
+                    <p className="dashboard-description">
+                      {viewingAllMaterials
+                        ? 'Every note, PDF, website, and calendar item in your workspace.'
+                        : viewingUnassigned
+                          ? 'Materials not yet organized into a course.'
+                          : 'Notes, PDFs, websites, and calendar items for this course.'}
+                    </p>
+                  </div>
+                  <div className="course-page-actions">
+                    {selectedCourse && (
+                      <>
+                        <button className="text-action" onClick={() => openCourseEditor(selectedCourse)} type="button">
+                          <Icon name="edit" size={15} /> Edit course
+                        </button>
+                        <button className="text-action course-delete-action" onClick={() => void removeCourse(selectedCourse)} type="button">
+                          <Icon name="trash" size={15} /> Delete
+                        </button>
+                      </>
+                    )}
+                    <button className="text-action" onClick={showCourseList} type="button">
+                      All courses <Icon name="chevron" size={15} />
+                    </button>
+                  </div>
+                </div>
+                {pdfError && <p className="global-error" role="alert">{pdfError}</p>}
+                {coursesLoading || pdfsLoading ? (
+                  <div className="shortcuts-message">Loading your course materials…</div>
+                ) : (
+                  <div className="course-material-sections">
+                    <section className="course-material-section">
+                      <h2>Notes <span>{courseNotes.length}</span></h2>
+                      {courseNotes.length === 0 ? <p>No notes in this course.</p> : (
+                        <div className="course-material-list">
+                          {courseNotes.map((note) => (
+                            <button className="course-material-item" key={note.id} onClick={() => openNoteEditor(note)} type="button">
+                              <Icon name="notes" size={17} />
+                              <span><strong>{note.title}</strong><small>{note.content.trim() || 'No note content'}</small></span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                    <section className="course-material-section">
+                      <h2>PDFs <span>{coursePdfs.length}</span></h2>
+                      {coursePdfs.length === 0 ? <p>No PDFs in this course.</p> : (
+                        <div className="course-material-list">
+                          {coursePdfs.map((pdf) => (
+                            <button className="course-material-item" key={pdf.id} onClick={() => openPdf(pdf)} type="button">
+                              <Icon name="pdf" size={17} />
+                              <span><strong>{pdf.filename}</strong><small>{formatFileSize(pdf.size_bytes)}</small></span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                    <section className="course-material-section">
+                      <h2>Websites <span>{courseShortcuts.length}</span></h2>
+                      {courseShortcuts.length === 0 ? <p>No websites in this course.</p> : (
+                        <div className="course-material-list">
+                          {courseShortcuts.map((shortcut) => (
+                            <div className="course-material-item" key={shortcut.id}>
+                              <Icon name="globe" size={17} />
+                              <a href={shortcut.url} rel="noreferrer" target="_blank">
+                                <strong>{shortcut.name}</strong><small>{new URL(shortcut.url).hostname}</small>
+                              </a>
+                              <button aria-label={`Edit ${shortcut.name}`} className="course-material-edit" onClick={() => openShortcutEditor(shortcut)} type="button">
+                                <Icon name="edit" size={15} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                    <section className="course-material-section">
+                      <h2>Calendar <span>{courseCalendarEvents.length}</span></h2>
+                      {courseCalendarEvents.length === 0 ? <p>No calendar items in this course.</p> : (
+                        <div className="course-material-list">
+                          {courseCalendarEvents.map((calendarEvent) => (
+                            <button
+                              className="course-material-item"
+                              key={calendarEvent.id}
+                              onClick={() => {
+                                const date = calendarEvent.event_date ?? calendarEvent.start_date ?? calendarToday
+                                setSelectedCalendarDate(date)
+                                const parsed = parseLocalDate(date)
+                                setCalendarMonth(new Date(parsed.getFullYear(), parsed.getMonth(), 1))
+                                openCalendarEditor(calendarEvent, date)
+                                navigateTo('calendar')
+                              }}
+                              type="button"
+                            >
+                              <span className="course-event-color" style={{ backgroundColor: calendarEvent.color }} />
+                              <span><strong>{calendarEvent.title}</strong><small>{calendarEvent.event_type === 'class' ? 'Weekly class' : calendarEvent.event_date}</small></span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="dashboard-heading">
+                  <div>
+                    <p className="dashboard-eyebrow">YOUR STUDYSPACE</p>
+                    <h1>Courses</h1>
+                    <p className="dashboard-description">Organize notes, PDFs, websites, and calendar items by subject.</p>
+                  </div>
+                  <button className="add-shortcut-button" onClick={() => openCourseEditor()} type="button">
+                    <Icon name="plus" size={17} /> Add course
+                  </button>
+                </div>
+                {pdfError && <p className="global-error" role="alert">{pdfError}</p>}
+                {coursesLoading || pdfsLoading ? (
+                  <div className="shortcuts-message">Loading your courses…</div>
+                ) : (
+                  <div className="course-grid">
+                    <button className="course-card unassigned-course-card" onClick={openAllMaterials} type="button">
+                      <span className="course-card-color" />
+                      <strong>All materials</strong>
+                      <small>{shortcuts.length + notes.length + pdfs.length + calendarEvents.length} items</small>
+                    </button>
+                    {courses.map((course) => {
+                      const count = [
+                        shortcuts.filter((item) => item.course_id === course.id).length,
+                        notes.filter((item) => item.course_id === course.id).length,
+                        pdfs.filter((item) => item.course_id === course.id).length,
+                        calendarEvents.filter((item) => item.course_id === course.id).length,
+                      ].reduce((total, amount) => total + amount, 0)
+                      return (
+                        <article className="course-card" key={course.id}>
+                          <button className="course-card-open" onClick={() => openCourse(course)} type="button">
+                            <span className="course-card-color" style={{ backgroundColor: course.color }} />
+                            <strong>{course.name}</strong>
+                            <small>{count} {count === 1 ? 'item' : 'items'}</small>
+                          </button>
+                          <button aria-label={`Edit ${course.name}`} className="course-card-action" onClick={() => openCourseEditor(course)} type="button">
+                            <Icon name="edit" size={15} />
+                          </button>
+                          <button aria-label={`Delete ${course.name}`} className="course-card-action course-card-delete" onClick={() => void removeCourse(course)} type="button">
+                            <Icon name="trash" size={15} />
+                          </button>
+                        </article>
+                      )
+                    })}
+                    <button className="course-card unassigned-course-card" onClick={openUnassignedMaterials} type="button">
+                      <span className="course-card-color" />
+                      <strong>Unassigned</strong>
+                      <small>{unassignedCount} {unassignedCount === 1 ? 'item' : 'items'}</small>
+                    </button>
+                    {courses.length === 0 && unassignedCount === 0 && (
+                      <p className="course-list-empty">Create a course to start organizing your study materials.</p>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        ) : activePage === 'dashboard' ? (
           <section className="dashboard">
             <div className="dashboard-heading">
               <div>
@@ -1364,7 +1845,7 @@ function App() {
                 className="add-shortcut-button"
                 onClick={() => {
                   setShortcutError('')
-                  setShortcutOpen(true)
+                  openShortcutEditor()
                 }}
                 type="button"
               >
@@ -1379,7 +1860,7 @@ function App() {
                 <span className="empty-shortcuts-icon"><Icon name="external" size={22} /></span>
                 <h2>Make this space yours</h2>
                 <p>Add the websites you use for studying. They’ll be ready here whenever you need them.</p>
-                <button className="add-shortcut-button" onClick={() => setShortcutOpen(true)} type="button">
+                <button className="add-shortcut-button" onClick={() => openShortcutEditor()} type="button">
                   <Icon name="plus" size={17} /> Add your first shortcut
                 </button>
               </div>
@@ -1400,6 +1881,15 @@ function App() {
                       </span>
                       <Icon name="external" size={16} />
                     </a>
+                    <button
+                      aria-label={`Edit ${shortcut.name}`}
+                      className="edit-shortcut-button"
+                      onClick={() => openShortcutEditor(shortcut)}
+                      title="Edit shortcut"
+                      type="button"
+                    >
+                      <Icon name="edit" size={15} />
+                    </button>
                     <button
                       aria-label={`Remove ${shortcut.name}`}
                       className="remove-shortcut-button"
@@ -1741,6 +2231,7 @@ function App() {
                     type="file"
                   />
                 </label>
+                <CourseSelect courses={courses} onChange={setPdfCourseId} value={pdfCourseId ?? selectedCourseForItems ?? ''} />
                 <button className="add-shortcut-button" disabled={pdfUploadBusy} type="submit">
                   <Icon name="plus" size={17} /> Upload PDF
                 </button>
@@ -1773,6 +2264,11 @@ function App() {
                           <span>{formatFileSize(pdf.size_bytes)} · {new Date(pdf.uploaded_at * 1000).toLocaleDateString()}</span>
                         </span>
                       </button>
+                      <CourseSelect
+                        courses={courses}
+                        onChange={(courseId) => void changePdfCourse(pdf, courseId)}
+                        value={pdf.course_id ?? ''}
+                      />
                       <a
                         aria-label={`Download ${pdf.filename}`}
                         className="pdf-download-button"
@@ -1806,6 +2302,14 @@ function App() {
                         >
                           Download
                         </a>
+                        <button
+                          aria-label={`Delete ${selectedPdf.filename}`}
+                          className="pdf-viewer-action pdf-viewer-action-delete"
+                          onClick={() => void deletePdf(selectedPdf)}
+                          type="button"
+                        >
+                          Delete
+                        </button>
                       </div>
                     </div>
                     <iframe
@@ -1938,6 +2442,11 @@ function App() {
                   value={calendarDraft.description}
                 />
               </label>
+              <CourseSelect
+                courses={courses}
+                onChange={(courseId) => setCalendarDraft((current) => ({ ...current, course_id: courseId || null }))}
+                value={calendarDraft.course_id ?? ''}
+              />
               {calendarDraft.event_type === 'event' ? (
                 <label>
                   Date
@@ -2091,9 +2600,51 @@ function App() {
                 <input checked={notePinned} onChange={(event) => setNotePinned(event.target.checked)} type="checkbox" />
                 Pin this note to the dashboard
               </label>
+              <CourseSelect courses={courses} onChange={setNoteCourseId} value={noteCourseId} />
               {noteEditorError && <p className="auth-error" role="alert">{noteEditorError}</p>}
               <button className="auth-submit" disabled={noteSaving} type="submit">
                 {noteSaving ? 'Saving…' : editingNoteId ? 'Save changes' : 'Create note'}
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {courseEditorOpen && (
+        <div
+          className="auth-overlay"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setCourseEditorOpen(false)
+          }}
+        >
+          <section aria-labelledby="course-editor-title" aria-modal="true" className="auth-dialog" role="dialog">
+            <button aria-label="Close" className="auth-close" onClick={() => setCourseEditorOpen(false)} type="button">×</button>
+            <span className="university-icon"><Icon name="notes" size={19} /></span>
+            <p className="auth-eyebrow">YOUR STUDYSPACE</p>
+            <h1 id="course-editor-title">{editingCourseId ? 'Edit course' : 'Add a course'}</h1>
+            <p className="auth-subtitle">Keep related study materials together by subject.</p>
+            <form className="auth-form" onSubmit={submitCourse}>
+              <label>
+                Course name
+                <input
+                  autoFocus
+                  maxLength={64}
+                  onChange={(event) => setCourseNameDraft(event.target.value)}
+                  required
+                  value={courseNameDraft}
+                />
+              </label>
+              <label>
+                Color
+                <select onChange={(event) => setCourseColorDraft(event.target.value)} value={courseColorDraft}>
+                  {COURSE_COLORS.map((color) => (
+                    <option key={color.value} value={color.value}>{color.label}</option>
+                  ))}
+                </select>
+              </label>
+              {courseError && <p className="auth-error" role="alert">{courseError}</p>}
+              <button className="auth-submit" disabled={courseSaving} type="submit">
+                {courseSaving ? 'Saving…' : editingCourseId ? 'Save changes' : 'Create course'}
               </button>
             </form>
           </section>
@@ -2191,22 +2742,30 @@ function App() {
         <div
           className="auth-overlay"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setShortcutOpen(false)
+            if (event.target === event.currentTarget) {
+              setShortcutOpen(false)
+              setEditingShortcutId(null)
+            }
           }}
         >
           <section aria-labelledby="shortcut-title" aria-modal="true" className="auth-dialog" role="dialog">
             <button
               aria-label="Close"
               className="auth-close"
-              onClick={() => setShortcutOpen(false)}
+              onClick={() => {
+                setShortcutOpen(false)
+                setEditingShortcutId(null)
+              }}
               type="button"
             >
               ×
             </button>
             <div className="auth-brand-mark"><span /></div>
             <p className="auth-eyebrow">YOUR STUDYSPACE</p>
-            <h1 id="shortcut-title">Add a shortcut</h1>
-            <p className="auth-subtitle">Save a website you want quick access to.</p>
+            <h1 id="shortcut-title">{editingShortcutId ? 'Edit shortcut' : 'Add a shortcut'}</h1>
+            <p className="auth-subtitle">
+              {editingShortcutId ? 'Update the name or website URL.' : 'Save a website you want quick access to.'}
+            </p>
             <form className="auth-form" onSubmit={submitShortcut}>
               <label>
                 Name
@@ -2230,9 +2789,12 @@ function App() {
                   value={shortcutUrl}
                 />
               </label>
+              <CourseSelect courses={courses} onChange={setShortcutCourseId} value={shortcutCourseId} />
               {shortcutError && <p className="auth-error" role="alert">{shortcutError}</p>}
               <button className="auth-submit" disabled={shortcutSubmitting} type="submit">
-                {shortcutSubmitting ? 'Saving shortcut…' : 'Save shortcut'}
+                {shortcutSubmitting
+                  ? 'Saving shortcut…'
+                  : editingShortcutId ? 'Save changes' : 'Save shortcut'}
               </button>
             </form>
           </section>

@@ -1,6 +1,6 @@
 # Study Central
 
-Study Central is a React + TypeScript frontend with a Rust backend for local development and a Cloudflare Worker + D1 option for deployment. It supports account creation with username, email, and password, email/password login, session restore, and logout. Signed-in users can create, view, search, and remove their own website shortcuts, create and organize server-saved notes, pin notes to the dashboard, manage a server-saved to-do list, maintain a calendar of one-day events and recurring classes, upload and read PDFs, and save a university token to their account.
+Study Central is a React + TypeScript frontend with a Rust backend for local development and a Cloudflare Worker + D1 option for deployment. It supports account creation with username, email, and password, email/password login, session restore, and logout. Signed-in users can organize notes, PDFs, website shortcuts, and calendar items into courses; create, edit, view, search, and remove their shortcuts; pin notes to the dashboard; manage a server-saved to-do list; maintain a calendar of one-day events and recurring classes; upload, read, and delete PDFs; and save a university token to their account.
 
 The frontend caches only the signed-in profile in browser local storage so the dashboard can appear immediately on refresh. Passwords and session credentials stay out of local storage; the server validates the HttpOnly session cookie.
 
@@ -30,13 +30,23 @@ The frontend is served by Vite, which proxies `/api` requests to the Rust backen
 
 Open **Notes** from the left navigation to create, edit, pin, and delete notes. Notes are stored in the backend database per account; pinned notes also appear on the dashboard.
 
+Open **Courses** to create and color-code subjects, browse all materials, or view items grouped by course. Choose a course when adding or editing a note, shortcut, calendar item, or PDF; existing items can be moved from their current page. Items without a course remain under **Unassigned**. Deleting a course keeps its materials and moves them back to Unassigned.
+
+The local Rust backend creates and upgrades its course tables and associations at startup. Cloudflare D1 uses the ordered migrations in `migrations/`; `npm run deploy:worker` applies pending migrations before deploying the Worker.
+
+### Troubleshooting API 404s
+
+If `/api/courses` returns an empty `404` during local development, the backend process may still be running an older build that does not include the courses route. Stop that backend process and restart it with `./run_backend.sh`; do not start a second backend on the same port. To check the local API directly, `curl -i http://127.0.0.1:3001/api/courses` should return a JSON `401` when you are not signed in, rather than a `404`.
+
+For a deployed Cloudflare Worker, deploy the current code and apply D1 migrations with `npm run deploy:worker`. A Worker with an older deployment may not serve the courses route.
+
 The dashboard to-do list lets you add tasks, mark them complete or incomplete, and remove them. Tasks are stored in the backend database per account.
 
 Open **Calendar** from the left navigation to add one-day events or weekly classes with inclusive start and end dates, descriptions, times, and color labels. Set a reminder from 1 to 30 days ahead (or leave it at no reminder); reminders appear under the bell and on the Notifications page. Calendar items are stored in the backend database per account.
 
 Open **PDFs** from the left navigation to upload, preview, fullscreen, download, and delete PDFs. Uploads require a signed-in account, are stored in the server database per account, and are limited to 5 MB per file.
 
-The local Rust backend fetches a site's `/favicon.ico` when a shortcut is added and saves a small supported image with that shortcut. If an icon is unavailable, the shortcut still works with a generic icon. Favicon requests are limited to public HTTP(S) hosts and standard web ports; private or local network addresses and redirects are not fetched. Shortcut URLs belong to the account that created them.
+Edit or remove a shortcut from its card on the dashboard. The local Rust backend fetches a site's `/favicon.ico` when a shortcut is added or edited and saves a small supported image with that shortcut. If an icon is unavailable, the shortcut still works with a generic icon. Favicon requests are limited to public HTTP(S) hosts and standard web ports; private or local network addresses and redirects are not fetched. Shortcut URLs belong to the account that created them.
 
 ## Cloudflare Workers deployment
 

@@ -12,6 +12,14 @@ const CALENDAR_COLORS = new Set([
   "#83b8e8",
   "#d99bc8",
 ]);
+const COURSE_COLORS = new Set([
+  "#bda7f5",
+  "#f2a6a0",
+  "#f2c879",
+  "#83c9ad",
+  "#83b8e8",
+  "#d99bc8",
+]);
 
 class ApiError extends Error {
   constructor(status, message) {
@@ -356,10 +364,94 @@ function normalizeShortcutUrl(input) {
   return url.href;
 }
 
+function validateShortcutName(value) {
+  const name = typeof value === "string" ? value.trim() : "";
+  if (!name || characterCount(name) > 64 || /\p{Cc}/u.test(name)) {
+    fail(400, "Name must be between 1 and 64 characters.");
+  }
+  return name;
+}
+
+function validateCourse(body) {
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!name || characterCount(name) > 64 || /\p{Cc}/u.test(name)) {
+    fail(400, "Course name must be between 1 and 64 characters.");
+  }
+  if (!COURSE_COLORS.has(body.color)) fail(400, "Choose a supported course color.");
+  return { name, color: body.color };
+}
+
+async function validateCourseOwnership(db, userId, courseId) {
+  if (courseId === null || courseId === undefined || courseId === "") return null;
+  if (typeof courseId !== "string") fail(400, "Course selection is invalid.");
+  const course = await db.prepare(
+    "SELECT id FROM courses WHERE id = ? AND user_id = ?",
+  ).bind(courseId, userId).first();
+  if (!course) fail(400, "Course not found.");
+  return courseId;
+}
+
+async function listCourses(request, db) {
+  const user = await requireUser(request, db);
+  const result = await db.prepare(
+    "SELECT id, name, color, created_at FROM courses WHERE user_id = ? ORDER BY name COLLATE NOCASE, id",
+  ).bind(user.id).all();
+  return jsonResponse({ courses: result.results });
+}
+
+async function saveCourse(request, db, id = null) {
+  const user = await requireUser(request, db);
+  const course = validateCourse(await readJson(request));
+  const courseId = id ?? randomToken();
+  if (id) {
+    try {
+      const result = await db.prepare(
+        "UPDATE courses SET name = ?, color = ? WHERE id = ? AND user_id = ?",
+      ).bind(course.name, course.color, id, user.id).run();
+      if (result.meta.changes === 0) fail(404, "Course not found.");
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      if (uniqueConstraint(error, "courses.user_id, courses.name")) {
+        fail(409, "A course with that name already exists.");
+      }
+      throw error;
+    }
+    const saved = await db.prepare(
+      "SELECT created_at FROM courses WHERE id = ? AND user_id = ?",
+    ).bind(id, user.id).first();
+    return jsonResponse({ course: { id, ...course, created_at: saved.created_at } });
+  }
+  const createdAt = timestamp();
+  try {
+    await db.prepare(
+      "INSERT INTO courses (id, user_id, name, color, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).bind(courseId, user.id, course.name, course.color, createdAt).run();
+  } catch (error) {
+    if (uniqueConstraint(error, "courses.user_id, courses.name")) {
+      fail(409, "A course with that name already exists.");
+    }
+    throw error;
+  }
+  return jsonResponse({ course: { id: courseId, ...course, created_at: createdAt } }, 201);
+}
+
+async function deleteCourse(request, db, id) {
+  const user = await requireUser(request, db);
+  const statements = ["shortcuts", "notes", "calendar_events", "pdfs"].map((table) =>
+    db.prepare(`UPDATE ${table} SET course_id = NULL WHERE course_id = ? AND user_id = ?`)
+      .bind(id, user.id));
+  statements.push(
+    db.prepare("DELETE FROM courses WHERE id = ? AND user_id = ?").bind(id, user.id),
+  );
+  const results = await db.batch(statements);
+  if (results.at(-1)?.meta.changes === 0) fail(404, "Course not found.");
+  return noContentResponse();
+}
+
 async function listShortcuts(request, db) {
   const user = await requireUser(request, db);
   const result = await db.prepare(
-    "SELECT id, name, url, icon_data FROM shortcuts WHERE user_id = ? ORDER BY created_at, id",
+    "SELECT id, name, url, icon_data, course_id FROM shortcuts WHERE user_id = ? ORDER BY created_at, id",
   ).bind(user.id).all();
   return jsonResponse({ shortcuts: result.results });
 }
@@ -367,18 +459,16 @@ async function listShortcuts(request, db) {
 async function createShortcut(request, db) {
   const user = await requireUser(request, db);
   const body = await readJson(request);
-  const name = typeof body.name === "string" ? body.name.trim() : "";
-  if (!name || characterCount(name) > 64 || /\p{Cc}/u.test(name)) {
-    fail(400, "Name must be between 1 and 64 characters.");
-  }
+  const name = validateShortcutName(body.name);
   const url = normalizeShortcutUrl(body.url);
+  const courseId = await validateCourseOwnership(db, user.id, body.course_id);
   const id = randomToken();
   const createdAt = timestamp();
   try {
     await db.prepare(
-      `INSERT INTO shortcuts (id, user_id, name, url, icon_data, created_at)
-       VALUES (?, ?, ?, ?, NULL, ?)`,
-    ).bind(id, user.id, name, url, createdAt).run();
+      `INSERT INTO shortcuts (id, user_id, name, url, icon_data, created_at, course_id)
+       VALUES (?, ?, ?, ?, NULL, ?, ?)`,
+    ).bind(id, user.id, name, url, createdAt, courseId).run();
   } catch (error) {
     if (uniqueConstraint(error, "shortcuts.user_id, shortcuts.url")) {
       fail(409, "That URL is already in your shortcuts.");
@@ -386,8 +476,31 @@ async function createShortcut(request, db) {
     throw error;
   }
   return jsonResponse({
-    shortcut: { id, name, url, icon_data: null },
+    shortcut: { id, name, url, icon_data: null, course_id: courseId },
   }, 201);
+}
+
+async function updateShortcut(request, db, id) {
+  const user = await requireUser(request, db);
+  const body = await readJson(request);
+  const name = validateShortcutName(body.name);
+  const url = normalizeShortcutUrl(body.url);
+  const courseId = await validateCourseOwnership(db, user.id, body.course_id);
+  try {
+    const result = await db.prepare(
+      "UPDATE shortcuts SET name = ?, url = ?, course_id = ? WHERE id = ? AND user_id = ?",
+    ).bind(name, url, courseId, id, user.id).run();
+    if (result.meta.changes === 0) fail(404, "Shortcut not found.");
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    if (uniqueConstraint(error, "shortcuts.user_id, shortcuts.url")) {
+      fail(409, "That URL is already in your shortcuts.");
+    }
+    throw error;
+  }
+  return jsonResponse({
+    shortcut: { id, name, url, icon_data: null, course_id: courseId },
+  });
 }
 
 async function deleteOwned(request, db, table, id, label) {
@@ -409,7 +522,7 @@ function validateNote(body) {
     fail(400, "Note content must be 50,000 characters or fewer.");
   }
   if (typeof body.pinned !== "boolean") fail(400, "Note pin state is invalid.");
-  return { title, content, pinned: body.pinned };
+  return { title, content, pinned: body.pinned, course_id: body.course_id ?? null };
 }
 
 function pdfFilename(request) {
@@ -469,7 +582,7 @@ async function readPdfBody(request) {
 async function listPdfs(request, db) {
   const user = await requireUser(request, db);
   const result = await db.prepare(
-    `SELECT id, filename, size_bytes, uploaded_at
+    `SELECT id, filename, size_bytes, uploaded_at, course_id
      FROM pdfs WHERE user_id = ? ORDER BY uploaded_at DESC, id`,
   ).bind(user.id).all();
   return jsonResponse({ pdfs: result.results });
@@ -477,15 +590,16 @@ async function listPdfs(request, db) {
 
 async function uploadPdf(request, db) {
   const user = await requireUser(request, db);
+  const courseId = await validateCourseOwnership(db, user.id, request.headers.get("x-course-id"));
   const filename = pdfFilename(request);
   const content = await readPdfBody(request);
   const id = randomToken();
   const uploadedAt = timestamp();
   const statements = [
     db.prepare(
-      `INSERT INTO pdfs (id, user_id, filename, content, size_bytes, uploaded_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).bind(id, user.id, filename, new Uint8Array(0), content.byteLength, uploadedAt),
+      `INSERT INTO pdfs (id, user_id, filename, content, size_bytes, uploaded_at, course_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(id, user.id, filename, new Uint8Array(0), content.byteLength, uploadedAt, courseId),
   ];
   for (let offset = 0, chunkIndex = 0; offset < content.byteLength; offset += PDF_CHUNK_BYTES, chunkIndex += 1) {
     statements.push(db.prepare(
@@ -494,8 +608,22 @@ async function uploadPdf(request, db) {
   }
   await db.batch(statements);
   return jsonResponse({
-    pdf: { id, filename, size_bytes: content.byteLength, uploaded_at: uploadedAt },
+    pdf: { id, filename, size_bytes: content.byteLength, uploaded_at: uploadedAt, course_id: courseId },
   }, 201);
+}
+
+async function updatePdfCourse(request, db, id) {
+  const user = await requireUser(request, db);
+  const body = await readJson(request);
+  const courseId = await validateCourseOwnership(db, user.id, body.course_id);
+  const result = await db.prepare(
+    "UPDATE pdfs SET course_id = ? WHERE id = ? AND user_id = ?",
+  ).bind(courseId, id, user.id).run();
+  if (result.meta.changes === 0) fail(404, "PDF not found.");
+  const pdf = await db.prepare(
+    "SELECT id, filename, size_bytes, uploaded_at, course_id FROM pdfs WHERE id = ? AND user_id = ?",
+  ).bind(id, user.id).first();
+  return jsonResponse({ pdf });
 }
 
 function encodePdfFilename(filename) {
@@ -544,7 +672,7 @@ async function getPdfFile(request, db, id) {
 async function listNotes(request, db) {
   const user = await requireUser(request, db);
   const result = await db.prepare(
-    `SELECT id, title, content, pinned, updated_at FROM notes
+    `SELECT id, title, content, pinned, updated_at, course_id FROM notes
      WHERE user_id = ? ORDER BY pinned DESC, updated_at DESC, id`,
   ).bind(user.id).all();
   return jsonResponse({
@@ -556,19 +684,20 @@ async function saveNote(request, db, id = null) {
   const user = await requireUser(request, db);
   const body = await readJson(request);
   const note = validateNote(body);
+  note.course_id = await validateCourseOwnership(db, user.id, note.course_id);
   const noteId = id ?? randomToken();
   const updatedAt = timestamp();
   if (id) {
     const result = await db.prepare(
-      `UPDATE notes SET title = ?, content = ?, pinned = ?, updated_at = ?
+      `UPDATE notes SET title = ?, content = ?, pinned = ?, updated_at = ?, course_id = ?
        WHERE id = ? AND user_id = ?`,
-    ).bind(note.title, note.content, Number(note.pinned), updatedAt, id, user.id).run();
+    ).bind(note.title, note.content, Number(note.pinned), updatedAt, note.course_id, id, user.id).run();
     if (result.meta.changes === 0) fail(404, "Note not found.");
   } else {
     await db.prepare(
-      `INSERT INTO notes (id, user_id, title, content, pinned, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).bind(noteId, user.id, note.title, note.content, Number(note.pinned), updatedAt).run();
+      `INSERT INTO notes (id, user_id, title, content, pinned, updated_at, course_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(noteId, user.id, note.title, note.content, Number(note.pinned), updatedAt, note.course_id).run();
   }
   return jsonResponse({
     note: { id: noteId, ...note, updated_at: updatedAt },
@@ -713,6 +842,7 @@ function validateCalendarEvent(body) {
     start_time: startTime,
     end_time: endTime,
     reminder_days: body.reminder_days,
+    course_id: body.course_id ?? null,
   };
 }
 
@@ -731,7 +861,7 @@ async function listCalendarEvents(request, db) {
   const user = await requireUser(request, db);
   const result = await db.prepare(
     `SELECT id, title, description, color, event_type, schedule, event_date,
-            start_date, end_date, weekdays, start_time, end_time, reminder_days
+            start_date, end_date, weekdays, start_time, end_time, reminder_days, course_id
      FROM calendar_events
      WHERE user_id = ?
      ORDER BY COALESCE(event_date, start_date), title`,
@@ -742,6 +872,7 @@ async function listCalendarEvents(request, db) {
 async function saveCalendarEvent(request, db, id = null) {
   const user = await requireUser(request, db);
   const event = validateCalendarEvent(await readJson(request));
+  event.course_id = await validateCourseOwnership(db, user.id, event.course_id);
   const eventId = id ?? randomToken();
   const values = [
     event.title,
@@ -756,13 +887,14 @@ async function saveCalendarEvent(request, db, id = null) {
     event.start_time,
     event.end_time,
     event.reminder_days,
+    event.course_id,
   ];
 
   if (id) {
     const result = await db.prepare(
       `UPDATE calendar_events SET title = ?, description = ?, color = ?, event_type = ?,
        schedule = ?, event_date = ?, start_date = ?, end_date = ?, weekdays = ?,
-       start_time = ?, end_time = ?, reminder_days = ?
+       start_time = ?, end_time = ?, reminder_days = ?, course_id = ?
        WHERE id = ? AND user_id = ?`,
     ).bind(...values, id, user.id).run();
     if (result.meta.changes === 0) fail(404, "Calendar event not found.");
@@ -770,8 +902,8 @@ async function saveCalendarEvent(request, db, id = null) {
     await db.prepare(
       `INSERT INTO calendar_events
        (id, user_id, title, description, color, event_type, schedule, event_date,
-        start_date, end_date, weekdays, start_time, end_time, reminder_days)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        start_date, end_date, weekdays, start_time, end_time, reminder_days, course_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(eventId, user.id, ...values).run();
   }
   return jsonResponse({ event: { id: eventId, ...event } }, id ? 200 : 201);
@@ -859,11 +991,19 @@ async function routeApi(request, env) {
 
     if (parts[1] === "auth") {
       response = await handleAuth(request, db, parts);
+    } else if (parts.length === 2 && parts[1] === "courses") {
+      if (method === "GET") response = await listCourses(request, db);
+      if (method === "POST") response = await saveCourse(request, db);
+    } else if (parts.length === 3 && parts[1] === "courses") {
+      if (method === "PUT") response = await saveCourse(request, db, parts[2]);
+      if (method === "DELETE") response = await deleteCourse(request, db, parts[2]);
     } else if (parts.length === 2 && parts[1] === "pdfs") {
       if (method === "GET") response = await listPdfs(request, db);
       if (method === "POST") response = await uploadPdf(request, db);
     } else if (parts.length === 3 && parts[1] === "pdfs" && method === "DELETE") {
       response = await deleteOwned(request, db, "pdfs", parts[2], "PDF");
+    } else if (parts.length === 3 && parts[1] === "pdfs" && method === "PUT") {
+      response = await updatePdfCourse(request, db, parts[2]);
     } else if (parts.length === 4 && parts[1] === "pdfs" && parts[3] === "file" && method === "GET") {
       response = await getPdfFile(request, db, parts[2]);
     } else if (parts.length === 2 && parts[1] === "shortcuts") {
@@ -871,6 +1011,8 @@ async function routeApi(request, env) {
       if (method === "POST") response = await createShortcut(request, db);
     } else if (parts.length === 3 && parts[1] === "shortcuts" && method === "DELETE") {
       response = await deleteOwned(request, db, "shortcuts", parts[2], "Shortcut");
+    } else if (parts.length === 3 && parts[1] === "shortcuts" && method === "PUT") {
+      response = await updateShortcut(request, db, parts[2]);
     } else if (parts.length === 2 && parts[1] === "notes") {
       if (method === "GET") response = await listNotes(request, db);
       if (method === "POST") response = await saveNote(request, db);

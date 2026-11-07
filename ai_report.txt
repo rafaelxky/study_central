@@ -1,0 +1,150 @@
+STUDYSPACE - IDEAS FOR BRINGING STUDY MATERIAL TOGETHER
+
+Goal
+----
+Make Studyspace the reliable home for a student's courses, materials, tasks,
+and deadlines, without turning the dashboard into a crowded collection of
+features. The most useful direction is to connect the things that already
+exist, then add a small number of capabilities that fill real gaps.
+
+Already in the project
+----------------------
+- Website shortcuts, including editing and removal
+- Server-saved notes, with dashboard pinning
+- A to-do list
+- Calendar events, recurring classes, and reminders
+- PDF upload, reading, download, and deletion
+
+Best additions, in priority order
+---------------------------------
+// implement this one first
+1. Courses / subjects as the main organizer
+   Let the student create courses (for example, Biology or History), each
+   with a name and optional color. Notes, PDFs, links, assignments, and
+   class meetings can belong to a course. Provide a simple "All materials"
+   view and a course view.
+
+   Why: Without a shared organizing concept, notes, PDFs, and links become
+   separate lists that are hard to navigate as they grow.
+
+   What this means
+   ---------------
+   A course (or subject) is a lightweight home for related study materials.
+   For example, a "Biology" course could contain its lecture notes, PDFs,
+   useful websites, and class events. The student can still see everything
+   in the existing Notes, PDFs, and shortcuts areas; the course provides
+   another way to find the same items, not duplicate copies of them.
+
+   The first version should let the student:
+   - Create, rename, recolor, and delete a course.
+   - Open a course page and see its linked notes, PDFs, shortcuts, and
+     calendar classes/events.
+   - Choose a course when creating or editing one of those items, and move
+     existing items into or out of a course.
+   - Keep items without a course in an "Unassigned" state, so existing data
+     stays available and users are not forced to organize everything at once.
+   - Delete a course without deleting its notes, PDFs, shortcuts, or events;
+     those items become unassigned instead.
+
+   How I would implement it
+   ------------------------
+   1. Add a courses table with an ID, owning user ID, name, optional color,
+      and creation time. Add a nullable course ID to notes, PDFs, shortcuts,
+      and calendar events. Existing rows remain unassigned. Apply equivalent
+      migrations for the local SQLite backend and Cloudflare D1.
+   2. Add authenticated course API endpoints to list, create, update, and
+      delete courses. Extend the existing material APIs to read and update
+      course associations. Every query and association change must verify
+      that both the material and selected course belong to the signed-in
+      user.
+   3. Add a Courses destination to the workspace navigation. Provide a
+      simple course list with create/edit controls and a course detail view
+      grouped by material type. Keep the existing Notes, PDFs, shortcuts,
+      and Calendar pages working as before.
+   4. Add a course selector to the existing create/edit controls for notes,
+      PDFs, shortcuts, and calendar items, plus a way to change the course
+      for existing items. The selector should include "No course" so a
+      student can remove an association.
+   5. Verify migrations preserve existing data, confirm users cannot see or
+      attach another user's course, and test that deleting a course leaves
+      its materials intact and unassigned.
+
+   Keep the first version focused on courses and associations. A combined
+   library, assignments, tags, and advanced folder structures can build on
+   this later instead of expanding the initial feature.
+
+//
+2. One searchable materials library
+   Add a library view that lists notes, PDFs, course links, and other study
+   resources together. Support search by title and filtering by course,
+   material type, and tags. Search should lead directly to the item.
+
+   Why: Finding a saved item quickly matters more than adding many different
+   kinds of content.
+
+3. Assignments linked to tasks and the calendar
+   Add an assignment with a title, course, due date, details, and status.
+   Show its due date on the calendar and let it appear in the task list.
+   Completing the task should update the assignment status consistently.
+
+   Why: Assignments connect course work, personal tasks, and deadlines,
+   which are currently managed in separate places.
+
+4. Attachments and resource links on notes
+   Allow a note to link to a PDF, website, or another note. Later, consider
+   attaching images or documents to a note. Keep the first version focused
+   on links to existing saved items rather than a general file manager.
+
+   Why: A lecture note is more useful when its slides, reading, and source
+   website are one click away.
+
+// I like this, folders I think is good
+5. Improve organization and navigation
+   Add tags or folders for shortcuts and materials, an unpin action for
+   dashboard notes, and a dedicated full-page task list. Keep the dashboard
+   focused on quick access and a small set of current items.
+
+   Why: These address organization gaps while preserving a fast home page.
+
+// also like this but for later
+6. Study review tools (optional later)
+   Consider flashcards with a simple spaced-review schedule, or a checklist
+   for exam preparation tied to a course and exam date.
+
+   Why: These can help with active recall, but should follow the core
+   organization and search features so they do not add clutter prematurely.
+
+// also like this for later
+7. Export and backup
+   Provide a way to export notes, tasks, calendar events, and material
+   metadata. Make it clear what happens to uploaded files and how they are
+   included in a backup.
+
+   Why: Students should be able to keep a copy of their work and avoid
+   depending on one application indefinitely.
+
+Suggested implementation order
+-------------------------------
+1. Build courses and associate existing notes, PDFs, links, and calendar
+   items with them.
+2. Add the combined library and search/filter experience.
+3. Add assignments that connect the task list and calendar.
+4. Add note-to-resource links and then evaluate whether file attachments are
+   needed.
+5. Finish smaller navigation improvements: unpin notes, full-page tasks, and
+   shortcut folders.
+6. Consider flashcards, exam preparation, and export based on actual use.
+
+Keep the product manageable
+---------------------------
+- Keep dashboard actions and upcoming deadlines visible; put less-used
+  management tools in their own pages.
+- Prefer one clear organization model (courses plus optional tags) over many
+  nested folder levels.
+- Make search available from anywhere and avoid requiring users to remember
+  where an item was saved.
+- Keep each user's private materials scoped to their account.
+- For uploaded files, enforce size/type limits and provide deletion and
+  backup expectations.
+- Add features incrementally and prioritize what removes repeated effort in
+  a student's weekly routine.
