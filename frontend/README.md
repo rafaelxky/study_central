@@ -23,4 +23,4 @@ The Vite development server proxies `/api` requests to the Rust backend at `127.
 
 Signed-in users can add, edit, and remove shortcuts by name and website URL. The dashboard lists only shortcuts belonging to the current account.
 
-Open **Courses** to create and color-code subjects, browse all materials, or view items grouped by course. Notes, PDFs, shortcuts, and calendar items can be assigned or moved between courses; deleting a course keeps its materials unassigned.
+Open **Courses** to create and color-code subjects, browse all materials, or view items grouped by course. Add notes, PDFs, websites, and calendar items directly from Courses; new items default to the open course and can be assigned to another course or left unassigned. Dedicated pages remain available for browsing and managing materials. Deleting a course keeps its materials unassigned.

@@ -2316,6 +2316,78 @@
   gap: 13px;
 }
 
+.course-add-materials {
+  align-items: center;
+  background: #191a21;
+  border: 1px solid #2b2c35;
+  border-radius: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  padding: 14px 16px;
+}
+
+.course-add-materials-heading h2 {
+  color: #e1deea;
+  font-size: 12px;
+  margin: 0 0 5px;
+}
+
+.course-add-materials-heading p {
+  color: #858794;
+  font-size: 10px;
+  margin: 0;
+}
+
+.course-add-material-actions {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.course-add-material-button {
+  align-items: center;
+  background: #25232f;
+  border: 1px solid #393644;
+  border-radius: 7px;
+  color: #d1c9e8;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 10px;
+  gap: 7px;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.course-add-material-button:hover {
+  background: #302d3b;
+  border-color: #5a526d;
+  color: #eee8ff;
+}
+
+.course-add-material-button:focus-visible {
+  outline: 2px solid #b5a0ff;
+  outline-offset: 2px;
+}
+
+.course-add-material-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.course-add-material-actions .course-select {
+  min-width: 135px;
+}
+
+.course-pdf-input {
+  display: none;
+}
+
 .course-delete-action {
   color: #d997a0;
 }
@@ -2547,6 +2619,20 @@
 
   .course-page-actions {
     align-self: stretch;
+  }
+
+  .course-add-materials {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .course-add-material-actions {
+    align-items: flex-start;
+    width: 100%;
+  }
+
+  .course-add-material-actions .course-select {
+    flex: 1 1 100%;
   }
 
   .course-material-sections {

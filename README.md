@@ -30,7 +30,7 @@ The frontend is served by Vite, which proxies `/api` requests to the Rust backen
 
 Open **Notes** from the left navigation to create, edit, pin, and delete notes. Notes are stored in the backend database per account; pinned notes also appear on the dashboard.
 
-Open **Courses** to create and color-code subjects, browse all materials, or view items grouped by course. Choose a course when adding or editing a note, shortcut, calendar item, or PDF; existing items can be moved from their current page. Items without a course remain under **Unassigned**. Deleting a course keeps its materials and moves them back to Unassigned.
+Open **Courses** to create and color-code subjects, browse all materials, or view items grouped by course. Add notes, PDFs, websites, and calendar items directly from the Courses page; when inside a course, new items default to that course. The forms let you choose a different course or leave an item unassigned. Existing items can still be managed from their dedicated pages. Deleting a course keeps its materials and moves them back to Unassigned.
 
 The local Rust backend creates and upgrades its course tables and associations at startup. Cloudflare D1 uses the ordered migrations in `migrations/`; `npm run deploy:worker` applies pending migrations before deploying the Worker.
 

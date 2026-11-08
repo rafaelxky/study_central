@@ -37,3 +37,10 @@ X - allow to edit the shortcuts
 - organize study material, notes, drawings, pictures, exercises,dps, urls to websites and relevant data etc
 
 X - should be able to delete pdfs
+
+- allow courses color to accept rgb values
+- courses should be in main page and of imediate access or maibe a menu somewere
+- allow me to create everything from courses and not the dedicated pages, centralize everything around that
+- implement a file system for courses to save all kinds of stuff
+
+

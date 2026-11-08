@@ -658,6 +658,7 @@ function App() {
       }
       setActivePage(page)
       setSelectedCourseId(courseIdFromPath(window.location.pathname))
+      setPdfCourseId(null)
     }
     window.addEventListener('popstate', handlePopState)
 
@@ -998,18 +999,21 @@ function App() {
     const path = `/courses/${encodeURIComponent(course.id)}`
     if (window.location.pathname !== path) window.history.pushState(null, '', path)
     setSelectedCourseId(course.id)
+    setPdfCourseId(null)
     setActivePage('courses')
   }
 
   function showCourseList() {
     if (window.location.pathname !== '/courses') window.history.pushState(null, '', '/courses')
     setSelectedCourseId(null)
+    setPdfCourseId(null)
   }
 
   function openUnassignedMaterials() {
     const path = '/courses/unassigned'
     if (window.location.pathname !== path) window.history.pushState(null, '', path)
     setSelectedCourseId('unassigned')
+    setPdfCourseId(null)
     setActivePage('courses')
   }
 
@@ -1017,6 +1021,7 @@ function App() {
     const path = '/courses/all'
     if (window.location.pathname !== path) window.history.pushState(null, '', path)
     setSelectedCourseId('all')
+    setPdfCourseId(null)
     setActivePage('courses')
   }
 
@@ -1203,6 +1208,7 @@ function App() {
       window.history.pushState(null, '', path)
     }
     setSelectedCourseId(null)
+    if (page === 'courses') setPdfCourseId(null)
     if ((page === 'pdfs' || page === 'courses') && activePageRef.current !== page) {
       setPdfsLoading(true)
       setPdfError('')
@@ -1212,7 +1218,10 @@ function App() {
     setNotificationDropdownOpen(false)
   }
 
-  async function uploadPdfFiles(files: File[]) {
+  async function uploadPdfFiles(
+    files: File[],
+    courseId: string | null = pdfCourseId ?? selectedCourseForItems,
+  ) {
     if (files.length === 0) {
       setPdfError('Choose or drop a PDF file to upload.')
       return
@@ -1230,7 +1239,7 @@ function App() {
     const uploadedPdfs: PdfMetadata[] = []
     try {
       for (const file of files) {
-        const result = await pdfsRequest(file, pdfCourseId ?? selectedCourseForItems)
+        const result = await pdfsRequest(file, courseId)
         const uploadedPdf = result.pdf
         if (!uploadedPdf) throw new Error('The server did not return the uploaded PDF.')
         uploadedPdfs.push(uploadedPdf)
@@ -1698,6 +1707,49 @@ function App() {
                     </button>
                   </div>
                 </div>
+                <section aria-label="Add study materials" className="course-add-materials">
+                  <div className="course-add-materials-heading">
+                    <h2>Add study material</h2>
+                    <p>{selectedCourse ? `Add new items to ${selectedCourse.name}, or choose another course in each form.` : 'Choose a course in each form, or leave items unassigned.'}</p>
+                  </div>
+                  <div className="course-add-material-actions">
+                    <button className="course-add-material-button" onClick={() => openNoteEditor()} type="button">
+                      <Icon name="notes" size={16} /> Add note
+                    </button>
+                    <button className="course-add-material-button" onClick={() => openShortcutEditor()} type="button">
+                      <Icon name="globe" size={16} /> Add website
+                    </button>
+                    <button className="course-add-material-button" onClick={() => openCalendarEditor()} type="button">
+                      <Icon name="calendar" size={16} /> Add calendar item
+                    </button>
+                    <CourseSelect
+                      courses={courses}
+                      onChange={setPdfCourseId}
+                      value={pdfCourseId ?? selectedCourseForItems ?? ''}
+                    />
+                    <button
+                      className="course-add-material-button"
+                      disabled={pdfUploadBusy}
+                      onClick={() => pdfInputRef.current?.click()}
+                      type="button"
+                    >
+                      <Icon name="pdf" size={16} /> {pdfUploadBusy ? 'Uploading…' : 'Upload PDF'}
+                    </button>
+                    <input
+                      accept="application/pdf,.pdf"
+                      aria-label="Choose a PDF to add to your course"
+                      className="course-pdf-input"
+                      disabled={pdfUploadBusy}
+                      onChange={(event) => {
+                        const files = Array.from(event.target.files ?? [])
+                        void uploadPdfFiles(files, pdfCourseId ?? selectedCourseForItems)
+                        event.currentTarget.value = ''
+                      }}
+                      ref={pdfInputRef}
+                      type="file"
+                    />
+                  </div>
+                </section>
                 {pdfError && <p className="global-error" role="alert">{pdfError}</p>}
                 {coursesLoading || pdfsLoading ? (
                   <div className="shortcuts-message">Loading your course materials…</div>
@@ -1761,7 +1813,6 @@ function App() {
                                 const parsed = parseLocalDate(date)
                                 setCalendarMonth(new Date(parsed.getFullYear(), parsed.getMonth(), 1))
                                 openCalendarEditor(calendarEvent, date)
-                                navigateTo('calendar')
                               }}
                               type="button"
                             >
@@ -1787,6 +1838,45 @@ function App() {
                     <Icon name="plus" size={17} /> Add course
                   </button>
                 </div>
+                <section aria-label="Add study materials" className="course-add-materials">
+                  <div className="course-add-materials-heading">
+                    <h2>Add study material</h2>
+                    <p>Start here to add notes, PDFs, websites, or calendar items to your studyspace.</p>
+                  </div>
+                  <div className="course-add-material-actions">
+                    <button className="course-add-material-button" onClick={() => openNoteEditor()} type="button">
+                      <Icon name="notes" size={16} /> Add note
+                    </button>
+                    <button className="course-add-material-button" onClick={() => openShortcutEditor()} type="button">
+                      <Icon name="globe" size={16} /> Add website
+                    </button>
+                    <button className="course-add-material-button" onClick={() => openCalendarEditor()} type="button">
+                      <Icon name="calendar" size={16} /> Add calendar item
+                    </button>
+                    <CourseSelect courses={courses} onChange={setPdfCourseId} value={pdfCourseId ?? ''} />
+                    <button
+                      className="course-add-material-button"
+                      disabled={pdfUploadBusy}
+                      onClick={() => pdfInputRef.current?.click()}
+                      type="button"
+                    >
+                      <Icon name="pdf" size={16} /> {pdfUploadBusy ? 'Uploading…' : 'Upload PDF'}
+                    </button>
+                    <input
+                      accept="application/pdf,.pdf"
+                      aria-label="Choose a PDF to add to your studyspace"
+                      className="course-pdf-input"
+                      disabled={pdfUploadBusy}
+                      onChange={(event) => {
+                        const files = Array.from(event.target.files ?? [])
+                        void uploadPdfFiles(files, pdfCourseId)
+                        event.currentTarget.value = ''
+                      }}
+                      ref={pdfInputRef}
+                      type="file"
+                    />
+                  </div>
+                </section>
                 {pdfError && <p className="global-error" role="alert">{pdfError}</p>}
                 {coursesLoading || pdfsLoading ? (
                   <div className="shortcuts-message">Loading your courses…</div>
